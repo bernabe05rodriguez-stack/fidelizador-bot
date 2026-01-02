@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Control - Fidelizador</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1 { color: #128C7E; margin-top: 0; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; color: #555; }
+        tr:hover { background-color: #f1f1f1; }
+        
+        .badge { padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; }
+        .online { background: #dcf8c6; color: #075e54; border: 1px solid #25d366; }
+        
+        #logs { height: 300px; overflow-y: scroll; background: #333; color: #0f0; padding: 10px; font-family: monospace; border-radius: 5px; }
+        .log-entry { margin-bottom: 5px; border-bottom: 1px solid #444; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h1>📱 Panel de Control Fidelizador</h1>
+        <p>Usuarios conectados en tiempo real.</p>
+        
+        <table id="tablaUsuarios">
+            <thead>
+                <tr>
+                    <th>ID Socket</th>
+                    <th>Número (WhatsApp)</th>
+                    <th>Sala</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                </tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>💻 Logs de Actividad</h3>
+        <div id="logs">Esperando actividad...</div>
+    </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+    const socket = io();
+
+    // Cuando el servidor nos manda la lista actualizada
+    socket.on('actualizar_panel', (salas) => {
+        const tbody = document.querySelector('#tablaUsuarios tbody');
+        tbody.innerHTML = ''; // Limpiar tabla
+
+        let hayGente = false;
+
+        for (const [nombreSala, usuarios] of Object.entries(salas)) {
+            usuarios.forEach(user => {
+                hayGente = true;
+                const row = `
+                    <tr>
+                        <td><small>${user.id.substr(0,6)}...</small></td>
+                        <td><strong>${user.numero}</strong></td>
+                        <td><span class="badge online">${nombreSala}</span></td>
+                        <td>🟢 Online</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+
+        if(!hayGente) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center">Esperando conexiones...</td></tr>';
+        }
+    });
+
+    // Logs en vivo
+    socket.on('log_servidor', (msg) => {
+        const logs = document.getElementById('logs');
+        const hora = new Date().toLocaleTimeString();
+        logs.innerHTML = `<div class="log-entry">[${hora}] ${msg}</div>` + logs.innerHTML;
+    });
+</script>
+
+</body>
+</html>
