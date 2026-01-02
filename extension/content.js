@@ -1,6 +1,6 @@
 // --- CONFIGURACIÓN ---
 // YA ESTÁ PUESTA TU DIRECCIÓN DE CLOUDFLARE AQUÍ:
-const URL_SERVIDOR = "https://contained-governance-asian-korea.trycloudflare.com";
+const URL_SERVIDOR = "https://evoapi-fidelizador.bm6z1s.easypanel.host/";
 setTimeout(() => iniciar(), 3000);
 
 function iniciar() {
