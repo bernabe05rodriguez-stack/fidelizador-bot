@@ -1,3 +1,10 @@
+/**
+ * index.js (EasyPanel friendly)
+ * - Express + Socket.IO
+ * - Health endpoint (/health) para que EasyPanel no te mande SIGTERM
+ * - Solo server.listen (no app.listen)
+ */
+
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -6,16 +13,35 @@ const path = require("path");
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO
 const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-// IMPORTANTE: EasyPanel nos dará un puerto, si no, usa el 3000
-const PORT = process.env.PORT || 3000;
+// EasyPanel suele inyectar PORT
+const PORT = Number(process.env.PORT) || 3000;
 
-// Servir el panel de control
+// --- LOGS + ERRORES (para ver si se cae por algo real) ---
+process.on("uncaughtException", (err) => {
+  console.error("❌ uncaughtException:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ unhandledRejection:", reason);
+});
+
+// --- HEALTHCHECK (CLAVE) ---
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
+
+// --- STATIC PANEL ---
 app.use(express.static(path.join(__dirname, "public")));
+
+// (Opcional) si alguien entra al / y no hay index.html, al menos responde algo:
+app.get("/", (req, res, next) => {
+  // Si existe public/index.html lo sirve express.static
+  // Si no existe, devolvemos un texto para que no falle el health/route
+  res.status(200).send("Servidor activo. Panel en /public (si existe).");
+});
 
 // --- ⚡ CONFIGURACIÓN DE VELOCIDAD ⚡ ---
 const TIEMPO_MIN = 15000; // 15 segundos
@@ -57,28 +83,42 @@ function actualizarDashboard() {
 }
 
 io.on("connection", (socket) => {
-  socket.on("unirse", (data) => {
-    const salaID = (data.sala || "").toUpperCase();
-    if (!salaID) return;
+  logDashboard(`🟢 Socket conectado: ${socket.id}`);
 
-    socket.join(salaID);
+  socket.on("unirse", (data = {}) => {
+    try {
+      const salaID = String(data.sala || "").toUpperCase().trim();
+      const miNumero = String(data.miNumero || "").trim();
 
-    if (!salas[salaID]) salas[salaID] = [];
+      if (!salaID || !miNumero) {
+        logDashboard("⚠️ unirse(): falta sala o miNumero");
+        return;
+      }
 
-    const existe = salas[salaID].find((u) => u.numero === data.miNumero);
-    if (!existe) salas[salaID].push({ id: socket.id, numero: data.miNumero });
-    else existe.id = socket.id;
+      socket.join(salaID);
 
-    logDashboard(`[+] Conectado: ${data.miNumero} en sala ${salaID}`);
-    actualizarDashboard();
+      if (!salas[salaID]) salas[salaID] = [];
 
-    iniciarBucleAleatorio(salaID);
+      const existe = salas[salaID].find((u) => u.numero === miNumero);
+      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero });
+      else existe.id = socket.id;
+
+      logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
+      actualizarDashboard();
+
+      iniciarBucleAleatorio(salaID);
+    } catch (e) {
+      console.error("❌ Error en unirse:", e);
+    }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
+    logDashboard(`🔴 Socket desconectado: ${socket.id} (${reason})`);
+
     for (const salaID in salas) {
       const antes = salas[salaID].length;
       salas[salaID] = salas[salaID].filter((u) => u.id !== socket.id);
+
       if (salas[salaID].length < antes) {
         logDashboard(`[-] Desconectado un usuario de ${salaID}`);
         actualizarDashboard();
@@ -89,59 +129,75 @@ io.on("connection", (socket) => {
 
 function iniciarBucleAleatorio(salaID) {
   if (loopsActivos[salaID]) return;
+
   loopsActivos[salaID] = true;
   logDashboard(`>>> 🚀 MOTOR INICIADO PARA SALA: ${salaID}`);
 
   const ejecutarCiclo = () => {
-    const usuarios = salas[salaID];
-    if (!usuarios || usuarios.length < 2) {
-      setTimeout(ejecutarCiclo, 5000);
-      return;
-    }
+    try {
+      const usuarios = salas[salaID];
 
-    const deudores = usuarios.filter((u) => respuestasPendientes[u.numero]);
+      if (!usuarios || usuarios.length < 2) {
+        setTimeout(ejecutarCiclo, 5000);
+        return;
+      }
 
-    if (deudores.length > 0) {
-      // RESPONDER
-      const emisor = deudores[Math.floor(Math.random() * deudores.length)];
-      const destino = respuestasPendientes[emisor.numero];
-      const receptor = usuarios.find((u) => u.numero === destino);
+      const deudores = usuarios.filter((u) => respuestasPendientes[u.numero]);
 
-      if (receptor) {
-        const texto = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
-        logDashboard(`↺ RESPUESTA: ${emisor.numero} -> ${destino}`);
+      if (deudores.length > 0) {
+        // RESPONDER
+        const emisor = deudores[Math.floor(Math.random() * deudores.length)];
+        const destino = respuestasPendientes[emisor.numero];
+        const receptor = usuarios.find((u) => u.numero === destino);
+
+        if (receptor) {
+          const texto = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
+          logDashboard(`↺ RESPUESTA: ${emisor.numero} -> ${destino}`);
+          io.to(emisor.id).emit("orden_servidor", {
+            accion: "escribir",
+            destino: receptor.numero,
+            mensaje: texto
+          });
+        }
+
+        delete respuestasPendientes[emisor.numero];
+      } else {
+        // INICIAR
+        const emisor = usuarios[Math.floor(Math.random() * usuarios.length)];
+        let receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
+        while (receptor.id === emisor.id) receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
+
+        const texto = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
+        logDashboard(`➤ INICIO: ${emisor.numero} -> ${receptor.numero}`);
         io.to(emisor.id).emit("orden_servidor", {
           accion: "escribir",
           destino: receptor.numero,
           mensaje: texto
         });
+
+        respuestasPendientes[receptor.numero] = emisor.numero;
       }
-      delete respuestasPendientes[emisor.numero];
-    } else {
-      // INICIAR
-      const emisor = usuarios[Math.floor(Math.random() * usuarios.length)];
-      let receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
-      while (receptor.id === emisor.id) receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
 
-      const texto = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
-      logDashboard(`➤ INICIO: ${emisor.numero} -> ${receptor.numero}`);
-      io.to(emisor.id).emit("orden_servidor", {
-        accion: "escribir",
-        destino: receptor.numero,
-        mensaje: texto
-      });
-      respuestasPendientes[receptor.numero] = emisor.numero;
+      const delay = Math.floor(Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN);
+      logDashboard(`[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`);
+      setTimeout(ejecutarCiclo, delay);
+    } catch (e) {
+      console.error("❌ Error en ejecutarCiclo:", e);
+      // reintenta igual para que no muera el loop
+      setTimeout(ejecutarCiclo, 5000);
     }
-
-    const delay = Math.floor(Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN);
-    logDashboard(`[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`);
-    setTimeout(ejecutarCiclo, delay);
   };
 
   setTimeout(ejecutarCiclo, 3000);
 }
 
-// ✅ IMPORTANTE: SOLO ESTE LISTEN (NO app.listen)
+// “Keep alive” cada 30s para que haya logs y el proceso no parezca “muerto”
+setInterval(() => {
+  console.log("🫀 keep-alive", new Date().toISOString());
+}, 30000);
+
+// ✅ SOLO ESTE LISTEN
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`>>> SERVIDOR NUBE ACTIVO EN PUERTO ${PORT}`);
+  console.log(">>> Healthcheck: /health");
 });
