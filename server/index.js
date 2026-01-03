@@ -9,6 +9,7 @@ const io = new Server(server, { cors: { origin: "*" } });
 
 // IMPORTANTE: Easypanel nos dará un puerto, si no, usa el 3000
 const port = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => console.log("Servidor en puerto", PORT));
 
 // Servir el panel de control
 app.use(express.static(path.join(__dirname, 'public')));
