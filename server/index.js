@@ -1,8 +1,10 @@
 /**
- * index.js (EasyPanel friendly)
+ * index.js (EasyPanel friendly - FORZADO A PUERTO 80)
  * - Express + Socket.IO
- * - Health endpoint (/health) para que EasyPanel no te mande SIGTERM
- * - Solo server.listen (no app.listen)
+ * - Health endpoint (/health)
+ * - Sirve /public
+ * - Solo server.listen (NO app.listen)
+ * - Puerto 80 para que EasyPanel lo publique como web (tu panel no rutea 3000)
  */
 
 const express = require("express");
@@ -17,10 +19,10 @@ const io = new Server(server, {
   cors: { origin: "*" }
 });
 
-// EasyPanel suele inyectar PORT
-const PORT = Number(process.env.PORT) || 3000;
+// ✅ FORZAMOS 80 (tu EasyPanel no está publicando 3000)
+const PORT = 80;
 
-// --- LOGS + ERRORES (para ver si se cae por algo real) ---
+// --- LOGS + ERRORES ---
 process.on("uncaughtException", (err) => {
   console.error("❌ uncaughtException:", err);
 });
@@ -28,7 +30,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("❌ unhandledRejection:", reason);
 });
 
-// --- HEALTHCHECK (CLAVE) ---
+// --- HEALTHCHECK ---
 app.get("/health", (req, res) => {
   res.status(200).send("ok");
 });
@@ -36,10 +38,8 @@ app.get("/health", (req, res) => {
 // --- STATIC PANEL ---
 app.use(express.static(path.join(__dirname, "public")));
 
-// (Opcional) si alguien entra al / y no hay index.html, al menos responde algo:
-app.get("/", (req, res, next) => {
-  // Si existe public/index.html lo sirve express.static
-  // Si no existe, devolvemos un texto para que no falle el health/route
+// Si no existe public/index.html, al menos responde algo en /
+app.get("/", (req, res) => {
   res.status(200).send("Servidor activo. Panel en /public (si existe).");
 });
 
@@ -103,101 +103,4 @@ io.on("connection", (socket) => {
       if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero });
       else existe.id = socket.id;
 
-      logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
-      actualizarDashboard();
-
-      iniciarBucleAleatorio(salaID);
-    } catch (e) {
-      console.error("❌ Error en unirse:", e);
-    }
-  });
-
-  socket.on("disconnect", (reason) => {
-    logDashboard(`🔴 Socket desconectado: ${socket.id} (${reason})`);
-
-    for (const salaID in salas) {
-      const antes = salas[salaID].length;
-      salas[salaID] = salas[salaID].filter((u) => u.id !== socket.id);
-
-      if (salas[salaID].length < antes) {
-        logDashboard(`[-] Desconectado un usuario de ${salaID}`);
-        actualizarDashboard();
-      }
-    }
-  });
-});
-
-function iniciarBucleAleatorio(salaID) {
-  if (loopsActivos[salaID]) return;
-
-  loopsActivos[salaID] = true;
-  logDashboard(`>>> 🚀 MOTOR INICIADO PARA SALA: ${salaID}`);
-
-  const ejecutarCiclo = () => {
-    try {
-      const usuarios = salas[salaID];
-
-      if (!usuarios || usuarios.length < 2) {
-        setTimeout(ejecutarCiclo, 5000);
-        return;
-      }
-
-      const deudores = usuarios.filter((u) => respuestasPendientes[u.numero]);
-
-      if (deudores.length > 0) {
-        // RESPONDER
-        const emisor = deudores[Math.floor(Math.random() * deudores.length)];
-        const destino = respuestasPendientes[emisor.numero];
-        const receptor = usuarios.find((u) => u.numero === destino);
-
-        if (receptor) {
-          const texto = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
-          logDashboard(`↺ RESPUESTA: ${emisor.numero} -> ${destino}`);
-          io.to(emisor.id).emit("orden_servidor", {
-            accion: "escribir",
-            destino: receptor.numero,
-            mensaje: texto
-          });
-        }
-
-        delete respuestasPendientes[emisor.numero];
-      } else {
-        // INICIAR
-        const emisor = usuarios[Math.floor(Math.random() * usuarios.length)];
-        let receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
-        while (receptor.id === emisor.id) receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
-
-        const texto = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
-        logDashboard(`➤ INICIO: ${emisor.numero} -> ${receptor.numero}`);
-        io.to(emisor.id).emit("orden_servidor", {
-          accion: "escribir",
-          destino: receptor.numero,
-          mensaje: texto
-        });
-
-        respuestasPendientes[receptor.numero] = emisor.numero;
-      }
-
-      const delay = Math.floor(Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN);
-      logDashboard(`[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`);
-      setTimeout(ejecutarCiclo, delay);
-    } catch (e) {
-      console.error("❌ Error en ejecutarCiclo:", e);
-      // reintenta igual para que no muera el loop
-      setTimeout(ejecutarCiclo, 5000);
-    }
-  };
-
-  setTimeout(ejecutarCiclo, 3000);
-}
-
-// “Keep alive” cada 30s para que haya logs y el proceso no parezca “muerto”
-setInterval(() => {
-  console.log("🫀 keep-alive", new Date().toISOString());
-}, 30000);
-
-// ✅ SOLO ESTE LISTEN
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`>>> SERVIDOR NUBE ACTIVO EN PUERTO ${PORT}`);
-  console.log(">>> Healthcheck: /health");
-});
+      logDashboard(`[+] Conectado: ${miNumero} en sala ${
