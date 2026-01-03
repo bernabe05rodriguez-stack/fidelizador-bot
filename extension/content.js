@@ -1,6 +1,9 @@
 // --- CONFIGURACIÓN ---
-// YA ESTÁ PUESTA TU DIRECCIÓN DE CLOUDFLARE AQUÍ:
-const URL_SERVIDOR = "https://evoapi-fidelizador.bm6z1s.easypanel.host/";
+// --- CONFIGURA TU SERVIDOR AQUÍ ---
+// 1. Despliega el servidor en Easypanel siguiendo la GUIA_DESPLIEGUE.md
+// 2. Copia la URL de tu dominio (ej: https://fidelizador.tudominio.com/)
+// 3. Pégala abajo entre las comillas:
+const URL_SERVIDOR = "PONER_TU_URL_AQUI";
 setTimeout(() => iniciar(), 3000);
 
 function iniciar() {
