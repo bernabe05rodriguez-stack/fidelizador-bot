@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel de Control - Fidelizador</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; background-color: #007bff; color: white; border: none; font-weight: bold; }
+    button:hover { background-color: #0056b3; }
+    button.delete { background-color: #dc3545; width: auto; float: right; }
+    button.delete:hover { background-color: #c82333; }
+    .hidden { display: none; }
+    .room-item { padding: 10px; border: 1px solid #ddd; margin-bottom: 5px; background: #f9f9f9; display: flex; justify-content: space-between; align-items: center; }
+  </style>
+</head>
+<body>
+
+  <h1>Panel Admin</h1>
+
+  <!-- LOGIN -->
+  <div id="login-section">
+    <h3>Iniciar Sesión</h3>
+    <input type="text" id="user" placeholder="Usuario">
+    <input type="password" id="pass" placeholder="Contraseña">
+    <button id="btnLogin">Entrar</button>
+    <p id="loginMsg" style="color: red;"></p>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="dashboard-section" class="hidden">
+    <h3>Gestión de Salas</h3>
+
+    <div>
+      <input type="text" id="newRoomName" placeholder="Nombre de nueva sala">
+      <button id="btnCreate">Crear Sala</button>
+    </div>
+
+    <h4>Salas Existentes</h4>
+    <div id="roomsList">Cargando...</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const loginSection = document.getElementById('login-section');
+    const dashboardSection = document.getElementById('dashboard-section');
+    const loginMsg = document.getElementById('loginMsg');
+    const roomsList = document.getElementById('roomsList');
+
+    // LOGIN
+    document.getElementById('btnLogin').addEventListener('click', () => {
+      const user = document.getElementById('user').value;
+      const pass = document.getElementById('pass').value;
+
+      socket.emit('admin_login', { user, pass }, (res) => {
+        if(res.success) {
+          loginSection.classList.add('hidden');
+          dashboardSection.classList.remove('hidden');
+          socket.emit('get_rooms'); // Cargar salas iniciales
+        } else {
+          loginMsg.innerText = res.msg || "Error de autenticación";
+        }
+      });
+    });
+
+    // CREATE ROOM
+    document.getElementById('btnCreate').addEventListener('click', () => {
+      const name = document.getElementById('newRoomName').value;
+      if(name) {
+        socket.emit('create_room', name);
+        document.getElementById('newRoomName').value = '';
+      }
+    });
+
+    // DELETE ROOM (Delegated)
+    roomsList.addEventListener('click', (e) => {
+      if(e.target.classList.contains('delete')) {
+        const roomName = e.target.dataset.room;
+        if(confirm(`¿Eliminar sala "${roomName}"?`)) {
+          socket.emit('delete_room', roomName);
+        }
+      }
+    });
+
+    // UPDATES
+    socket.on('rooms_update', (rooms) => {
+      renderRooms(rooms);
+    });
+
+    // Initial load response
+    socket.on('rooms_list', (rooms) => {
+      renderRooms(rooms);
+    });
+
+    function renderRooms(rooms) {
+      if(!rooms || rooms.length === 0) {
+        roomsList.innerHTML = "<p>No hay salas creadas.</p>";
+        return;
+      }
+
+      roomsList.innerHTML = rooms.map(r => `
+        <div class="room-item">
+          <span><strong>${r.name}</strong> (${r.count} usuarios)</span>
+          <button class="delete" data-room="${r.name}">Eliminar</button>
+        </div>
+      `).join('');
+    }
+  </script>
+</body>
+</html>
