@@ -9,11 +9,17 @@ chrome.storage.onChanged.addListener((cambios, area) => {
     if (area === 'local' && (cambios.fid_sala || cambios.fid_num)) {
         arrancarBot();
     }
+    // Si cambia la cola, y no estamos procesando, tal vez deberíamos arrancar?
+    // Mejor lo manejamos internamente.
 });
 
 let puertoKeepAlive = null;
 let intervaloMonitor = null;
 let yaEstaCorriendo = false;
+
+// --- COLA DE TRABAJO ---
+let colaDeTrabajo = [];
+let procesandoCola = false;
 
 function arrancarBot() {
     if (yaEstaCorriendo) return;
@@ -29,20 +35,93 @@ function arrancarBot() {
         mantenerVivaLaConexion();
         monitorearSesion();
 
-        // Revisar si quedó algo colgado de antes (por si se refrescó la página)
-        chequearTrabajoPendiente();
+        // Cargar cola persistida y trabajos pendientes
+        cargarColaYPendientes();
 
         // Escuchar órdenes del background (solo agrego el listener una vez)
         if (!window.tieneListenerFidelizador) {
             chrome.runtime.onMessage.addListener((mensaje, sender, responder) => {
                 if (mensaje.type === 'ORDEN' && mensaje.payload) {
                     console.log(`Orden recibida: Escribir a ${mensaje.payload.destino}`);
-                    abrirChatYEnviar(mensaje.payload.destino, mensaje.payload.mensaje);
+                    agregarACola(mensaje.payload.destino, mensaje.payload.mensaje);
                 }
             });
             window.tieneListenerFidelizador = true;
         }
     });
+}
+
+async function cargarColaYPendientes() {
+    try {
+        const data = await chrome.storage.local.get(['cola_trabajo', 'pending_job']);
+
+        // 1. Cargar cola persistida
+        if (data.cola_trabajo && Array.isArray(data.cola_trabajo)) {
+            colaDeTrabajo = data.cola_trabajo;
+            console.log(`Cola cargada (${colaDeTrabajo.length} items).`);
+        }
+
+        // 2. Revisar si había un trabajo activo (pending_job) que se interrumpió
+        const trabajo = data.pending_job;
+        if (trabajo) {
+            console.log("Encontré un trabajo pendiente (interrumpido):", trabajo);
+
+            // Verificamos antigüedad (> 5 mins descarta)
+            const ahora = Date.now();
+            if (trabajo.timestamp && (ahora - trabajo.timestamp > 300000)) {
+                 console.log("Trabajo pendiente muy viejo, descartando.");
+                 await chrome.storage.local.remove('pending_job');
+            } else {
+                 // Lo ponemos PRIMERO en la cola para reintentarlo
+                 colaDeTrabajo.unshift({ telefono: trabajo.telefono, mensaje: trabajo.mensaje });
+                 await guardarCola();
+                 // Y borramos el pending_job porque ahora está en la cola y se volverá a setear como pending cuando se procese
+                 await chrome.storage.local.remove('pending_job');
+            }
+        }
+
+        // Arrancamos a procesar si hay algo
+        if (colaDeTrabajo.length > 0) {
+            procesarCola();
+        }
+
+    } catch (e) {
+        console.error("Error cargando cola/pendientes:", e);
+    }
+}
+
+async function guardarCola() {
+    await chrome.storage.local.set({ cola_trabajo: colaDeTrabajo });
+}
+
+async function agregarACola(telefono, mensaje) {
+    colaDeTrabajo.push({ telefono, mensaje });
+    await guardarCola();
+    procesarCola();
+}
+
+async function procesarCola() {
+    if (procesandoCola) return;
+    procesandoCola = true;
+
+    while (colaDeTrabajo.length > 0) {
+        // Miramos el primero pero NO lo sacamos todavía del todo de la persistencia
+        // hasta que empiece realmente (o lo sacamos y lo ponemos en pending_job)
+        const trabajo = colaDeTrabajo[0];
+
+        // Lo sacamos del array local
+        colaDeTrabajo.shift();
+        // Guardamos el array actualizado (sin este item)
+        await guardarCola();
+
+        try {
+            await abrirChatYEnviar(trabajo.telefono, trabajo.mensaje);
+        } catch (error) {
+            console.error("Error procesando trabajo:", error);
+        }
+    }
+
+    procesandoCola = false;
 }
 
 // Revisa periódicamente si seguimos logueados en WhatsApp
@@ -113,8 +192,12 @@ async function abrirChatYEnviar(telefono, mensaje) {
         if (link.parentNode) link.parentNode.removeChild(link);
     }, 1000);
 
-    // Si no recarga la página, seguimos derecho. Si recarga, 'chequearTrabajoPendiente' se encarga.
-    procesarElEnvioDelMensaje(mensaje);
+    // Esperamos un poquito para que empiece la navegación antes de buscar el chat
+    // No es estrictamente necesario porque esperarElemento lo maneja, pero ayuda a la estabilidad.
+    await esperarUnToque(1000);
+
+    // Si no recarga la página, seguimos derecho. Si recarga, 'chequearTrabajoPendiente' (ahora cargarColaYPendientes) se encarga.
+    await procesarElEnvioDelMensaje(mensaje);
 }
 
 function esperarUnToque(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -132,22 +215,6 @@ function simularClick(elemento) {
     });
 }
 
-// Función vieja confiable para revisar si hay jobs colgados
-async function chequearTrabajoPendiente() {
-    try {
-        const data = await chrome.storage.local.get(['pending_job']);
-        const trabajo = data.pending_job;
-        if (trabajo) {
-            console.log("Encontré un trabajo pendiente:", trabajo);
-            await procesarElEnvioDelMensaje(trabajo.mensaje);
-            // Ya está, lo borramos
-            await chrome.storage.local.remove('pending_job');
-        }
-    } catch (e) {
-        console.error("Error chequeando pendientes:", e);
-    }
-}
-
 async function procesarElEnvioDelMensaje(mensaje) {
     console.log("Esperando que aparezca la caja de chat...");
     // Le damos hasta 60 segundos por si internet está lento
@@ -155,17 +222,28 @@ async function procesarElEnvioDelMensaje(mensaje) {
 
     if (!cajaChat) {
         console.error("No apareció la caja de chat. Abortando.");
+        // Si falló, lo borramos de pending para no trabar.
+        // Idealmente podríamos reintentar poniéndolo en cola de nuevo, pero simple es mejor.
+         chrome.storage.local.remove('pending_job');
         return;
     }
 
+    // 1. Abrir chat (ya hecho) -> Esperar 2s
+    console.log("Chat detectado. Esperando 2 segundos antes de pegar...");
+    await esperarUnToque(2000);
+
     cajaChat.focus();
 
+    // 2. Pegar mensaje
+    console.log("Pegando mensaje...");
     // Usamos execCommand porque React a veces ignora cambios directos al value
     document.execCommand('insertText', false, mensaje);
 
-    console.log(`Mensaje pegado. Esperando 2 segs para enviar...`);
+    // 3. Esperar 2s
+    console.log(`Mensaje pegado. Esperando 2 segundos para enviar...`);
     await esperarUnToque(2000);
 
+    // 4. Enviar
     // Buscamos el botón de enviar
     const btnEnviar = document.querySelector('button[aria-label="Send"]') ||
                       document.querySelector('span[data-icon="send"]');
@@ -173,9 +251,10 @@ async function procesarElEnvioDelMensaje(mensaje) {
     if (btnEnviar) {
          // A veces el click está en un padre o hijo, aseguramos
          const elementoClickeable = btnEnviar.closest('button') || btnEnviar;
-         elementoClickeable.click();
+         simularClick(elementoClickeable); // Usamos simularClick para asegurar que React lo tome
     } else {
         // Si no está el botón (raro), probamos con Enter
+        console.log("No encontré botón enviar, probando ENTER.");
         const enterEvent = new KeyboardEvent('keydown', {
             bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
         });
@@ -183,11 +262,11 @@ async function procesarElEnvioDelMensaje(mensaje) {
     }
     console.log("Mensaje enviado.");
 
-    // Esperamos un poquito antes de dar por terminado
+    // Esperamos un poquito antes de dar por terminado para asegurar que se vaya
     await esperarUnToque(2000);
 
-    // Limpiamos el pendiente
-    chrome.storage.local.remove('pending_job');
+    // Limpiamos el pendiente SOLO AHORA que terminamos
+    await chrome.storage.local.remove('pending_job');
 }
 
 // Utilidad para esperar que aparezca algo en el DOM
