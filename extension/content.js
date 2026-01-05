@@ -1,9 +1,5 @@
 // --- CONFIGURACIÓN ---
-// --- CONFIGURA TU SERVIDOR AQUÍ ---
-// 1. Despliega el servidor en Easypanel siguiendo la GUIA_DESPLIEGUE.md
-// 2. Copia la URL de tu dominio (ej: https://fidelizador.tudominio.com/)
-// 3. Pégala abajo entre las comillas:
-const URL_SERVIDOR = "PONER_TU_URL_AQUI";
+const URL_SERVIDOR = "http://fidelizador.online";
 setTimeout(() => iniciar(), 3000);
 
 function iniciar() {
