@@ -168,10 +168,9 @@ async function procesarEnvio(mensaje) {
     // Pegar mensaje (comando nativo funciona mejor que manipular value en React)
     document.execCommand('insertText', false, mensaje);
 
-    // Esperar 4-7s (Pedido por usuario: "dale mas tiempo")
-    const delay = Math.floor(Math.random() * (7000 - 4000 + 1)) + 4000;
-    console.log(`Waiting ${delay}ms with message pasted...`);
-    await esperar(delay);
+    // Esperar 2s
+    console.log(`Waiting 2000ms with message pasted...`);
+    await esperar(2000);
 
     // Enviar
     const btnEnviar = document.querySelector('button[aria-label="Send"]') ||
@@ -186,6 +185,9 @@ async function procesarEnvio(mensaje) {
         cajaChat.dispatchEvent(enterSend);
     }
     console.log("✅ Mensaje enviado (Lógica nueva).");
+
+    // Esperar 2s después de enviar
+    await esperar(2000);
 
     // Limpiar trabajo una vez procesado con éxito
     chrome.storage.local.remove('pending_job');

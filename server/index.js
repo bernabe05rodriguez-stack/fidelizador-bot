@@ -72,8 +72,8 @@ app.get("/", (req, res) => {
 });
 
 // --- ⚡ CONFIGURACIÓN DE VELOCIDAD ⚡ ---
-const TIEMPO_MIN = 10000; // 10 segundos
-const TIEMPO_MAX = 20000; // 20 segundos
+const TIEMPO_MIN = 15000; // 15 segundos siempre
+const TIEMPO_MAX = 15000; // 15 segundos siempre
 
 const FRASES_INICIO = [
   "Hola, estás?",
@@ -290,10 +290,8 @@ function iniciarBucleAleatorio(salaID) {
         logDashboard(`➤ INTERACCIÓN DOBLE: ${emisor.numero} ↔ ${receptor.numero}`);
       }
 
-      const delay = Math.floor(
-        Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN
-      );
-      setTimeout(ejecutarCiclo, delay);
+      // Espera 15s siempre
+      setTimeout(ejecutarCiclo, 15000);
     } catch (e) {
       console.error("❌ Error en ejecutarCiclo:", e);
       setTimeout(ejecutarCiclo, 5000);
