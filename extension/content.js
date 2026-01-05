@@ -80,121 +80,99 @@ function conectarKeepAlive() {
 
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
 async function abrirChatNuevo(telefono, mensaje) {
-    // 1. LIMPIAR BÚSQUEDA PREVIA (IMPORTANTE)
-    const btnBorrarBusqueda = document.querySelector('span[data-icon="x-alt"]') || document.querySelector('span[data-icon="search-container-clean"]');
-    if (btnBorrarBusqueda) {
-        btnBorrarBusqueda.click();
-        await esperar(500);
+    console.log(`🤖 Iniciando chat con ${telefono}...`);
+
+    // 1. ABRIR NUEVO CHAT (Ctrl+Alt+N)
+    const newChatEvent = new KeyboardEvent('keydown', {
+        bubbles: true, cancelable: true,
+        key: 'n', code: 'KeyN',
+        ctrlKey: true, altKey: true
+    });
+    document.body.dispatchEvent(newChatEvent);
+    
+    // Esperar a que se abra el panel y cargue el input
+    await esperar(1000);
+
+    // 2. PEGAR NUMERO
+    // Intentamos buscar el input visible en el panel de nuevo chat
+    // Normalmente el foco se va ahí automáticamente.
+    let searchInput = document.activeElement;
+    if (!searchInput || !searchInput.getAttribute('contenteditable')) {
+        // Fallback: buscamos input data-tab="3" que debería ser el del drawer si está abierto
+        const possibleInputs = document.querySelectorAll('div[contenteditable="true"][data-tab="3"]');
+        // Si hay varios, intentamos el último (usualmente el drawer está al final) o el que sea visible
+        if (possibleInputs.length > 0) {
+            searchInput = possibleInputs[possibleInputs.length - 1]; // Heurística
+            searchInput.focus();
+        } else {
+            console.warn("No encontré input editable, intentando escribir en el elemento activo...");
+        }
     }
 
-    // 2. BUSCAR EN LA BARRA LATERAL
-    const buscador = document.querySelector('div[contenteditable="true"][data-tab="3"]');
-    if(!buscador) return console.error("No encuentro el buscador de WhatsApp");
-    
-    // --- FIX: LIMPIEZA ROBUSTA ---
-    await limpiarBuscador(buscador);
-
+    // Pegar número
     document.execCommand('insertText', false, telefono);
-    
-    // Esperar a que WhatsApp procese el número
-    await esperar(1200);
 
-    // 3. PRESIONAR ENTER (Para forzar búsqueda en la DB)
-    const enterEvent = new KeyboardEvent('keydown', {
-        bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
-    });
-    buscador.dispatchEvent(enterEvent);
+    // 3. ESPERAR 8 SEGUNDOS (Pedido por usuario)
+    console.log("Esperando 8s para carga...");
+    await esperar(8000);
 
-    // Esperar resultados
-    await esperar(3000);
-
-    // 4. SELECCIONAR RESULTADO
+    // 4. SELECCIONAR CHAT
+    // Buscamos resultados visibles. El drawer de nuevo chat suele listar items con role="listitem"
     const resultados = document.querySelectorAll('div[role="listitem"]');
+
     if (resultados && resultados.length > 0) {
-        console.log("Clickeando resultado...");
-        // --- FIX: CLICK ROBUSTO (Mousedown -> Mouseup -> Click) ---
+        console.log("Seleccionando chat...");
+        // Click en el primer resultado (asumiendo que es el contacto buscado)
         simularClick(resultados[0]);
     } else {
-        console.warn("No se encontraron resultados en la búsqueda.");
+        console.error("No se encontraron resultados.");
+        // Fallback: Intentar Enter en el input por si acaso selecciona el único resultado
+        if (searchInput) {
+            const enterEvent = new KeyboardEvent('keydown', {
+                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
+            });
+            searchInput.dispatchEvent(enterEvent);
+        }
     }
 
-    await esperar(2500); // Esperar cambio de chat
+    // 5. ESPERAR 3 SEGUNDOS (Pedido por usuario)
+    console.log("Esperando 3s tras selección...");
+    await esperar(3000);
 
-    // --- FIX: SAFETY CHECK (Evitar escribir si la búsqueda sigue activa) ---
-    // Si el buscador todavía tiene texto, significa que NO se abrió el chat.
-    if (buscador.textContent && buscador.textContent.trim().length > 0) {
-        console.error("⛔ ABORTANDO: La búsqueda sigue activa. El chat no se abrió correctamente.");
-        // Intentamos limpiar para la próxima
-        buscador.textContent = '';
-        return;
-    }
-
-    // 5. ESCRIBIR EL MENSAJE
+    // 6. PEGAR MENSAJE
     const cajaChat = document.querySelector('div[contenteditable="true"][data-tab="10"]');
-    if(cajaChat) {
+    if (cajaChat) {
         cajaChat.focus();
-        
-        // Escribir mensaje
+        // Pegar mensaje
         document.execCommand('insertText', false, mensaje);
-        await esperar(800);
 
-        // 6. ENVIAR (Click + Enter por si acaso)
+        // 7. ESPERAR 2-5 SEGUNDOS ALEATORIAMENTE
+        const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+        console.log(`Esperando ${delay}ms antes de enviar...`);
+        await esperar(delay);
+
+        // 8. ENVIAR
         const btnEnviar = document.querySelector('button[aria-label="Send"]') || 
                           document.querySelector('span[data-icon="send"]');
-        
-        if(btnEnviar) {
-            // Click en el contenedor del icono a veces funciona mejor si el icono es un span
-            // Buscamos el padre button si es un span
-            const clickable = btnEnviar.closest('button') || btnEnviar;
-            clickable.click();
-            console.log("✅ Mensaje enviado (click).");
+        if (btnEnviar) {
+             const clickable = btnEnviar.closest('button') || btnEnviar;
+             clickable.click();
         } else {
-            // Intentar ENTER en la caja de chat
             const enterSend = new KeyboardEvent('keydown', {
                 bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
             });
             cajaChat.dispatchEvent(enterSend);
-            console.log("✅ Mensaje enviado (enter).");
         }
+        console.log("✅ Mensaje enviado.");
+
     } else {
-        console.error("❌ No se pudo abrir el chat (no veo la caja de texto).");
+        console.error("No se encontró la caja de chat.");
     }
 }
 
 function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function limpiarBuscador(buscador) {
-    buscador.focus();
-
-    // Estrategia 1: Reemplazar todo por un espacio y luego borrarlo
-    // Esto fuerza a React a registrar un cambio de input
-    document.execCommand('selectAll', false, null);
-    await esperar(50);
-    document.execCommand('insertText', false, ' ');
-    await esperar(50);
-    document.execCommand('selectAll', false, null);
-    await esperar(50);
-    document.execCommand('delete', false, null);
-    await esperar(100);
-
-    // Estrategia 2: Si queda texto, forzar vaciado y disparar evento de input
-    if (buscador.textContent && buscador.textContent.length > 0) {
-        console.warn("Limpieza standard falló, forzando vaciado...");
-        buscador.textContent = '';
-
-        // Simular evento de input para avisar a React
-        const inputEvent = new InputEvent('input', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'deleteContentBackward',
-            data: null
-        });
-        buscador.dispatchEvent(inputEvent);
-    }
-
-    await esperar(150);
-}
-
+// Se mantiene simularClick por ser útil
 function simularClick(elemento) {
     const eventos = ['mousedown', 'mouseup', 'click'];
     eventos.forEach(tipo => {
