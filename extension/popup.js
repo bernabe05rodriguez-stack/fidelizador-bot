@@ -149,7 +149,7 @@ function guardarYSalir(salaNombre) {
   if (cleanNumero.length < 5) return alert("El número parece inválido.");
 
   chrome.storage.local.set({ 'fid_num': cleanNumero, 'fid_sala': salaNombre, 'fid_paused': false }, () => {
-    alert(`Te has unido a la sala "${salaNombre}".\n\nSi WhatsApp ya está abierto, recarga la página (F5) para activar.`);
+    alert(`Te has unido a la sala "${salaNombre}".\n\nEl sistema debería iniciarse automáticamente en WhatsApp Web.`);
     window.close(); // Cerrar popup
   });
 }

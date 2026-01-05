@@ -5,16 +5,27 @@
 // Iniciar Keep-Alive y listeners
 setTimeout(() => iniciar(), 3000);
 
+// Listener para detectar configuración sin recargar página
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && (changes.fid_sala || changes.fid_num)) {
+        iniciar();
+    }
+});
+
 let keepAlivePort = null;
 let monitorInterval = null;
+let isFidelizadorRunning = false;
 
 function iniciar() {
+    if (isFidelizadorRunning) return;
+
     chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
         if (!data.fid_num || !data.fid_sala) {
             console.log("Fidelizador: Falta configurar número y sala en el icono.");
             return;
         }
 
+        isFidelizadorRunning = true;
         console.log("✅ Fidelizador iniciado en Content Script. Conectando a Background...");
         conectarKeepAlive();
         iniciarMonitorSesion();
@@ -81,12 +92,15 @@ async function abrirChatNuevo(telefono, mensaje) {
     if(!buscador) return console.error("No encuentro el buscador de WhatsApp");
     
     // --- FIX: LIMPIEZA ROBUSTA ---
-    // Usamos textContent para forzar vaciado visual antes del insertText
     buscador.focus();
-    buscador.textContent = '';
-    // Pequeña espera para que React note el cambio si es necesario,
-    // aunque execCommand insertText suele ser lo que React "escucha".
-    await esperar(50);
+    // Intento 1: Select All + Delete (Standard)
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+
+    // Intento 2: Fallback manual
+    if(buscador.textContent) buscador.textContent = '';
+
+    await esperar(200);
 
     document.execCommand('insertText', false, telefono);
     
