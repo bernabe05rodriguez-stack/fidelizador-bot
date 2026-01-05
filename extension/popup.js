@@ -6,11 +6,19 @@ const listaSalas = document.getElementById('listaSalas');
 const roomsContainer = document.getElementById('roomsContainer');
 const statusMsg = document.getElementById('status');
 const inputNumero = document.getElementById('miNumero');
+const currentInfo = document.getElementById('currentInfo');
+const savedSalaEl = document.getElementById('savedSala');
+const savedNumEl = document.getElementById('savedNum');
 
-// Cargar número guardado si existe
-chrome.storage.local.get(['fid_num'], (data) => {
+// Cargar datos guardados
+chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
   if (data.fid_num) {
     inputNumero.value = data.fid_num;
+  }
+  if (data.fid_sala && data.fid_num) {
+    savedSalaEl.innerText = data.fid_sala;
+    savedNumEl.innerText = data.fid_num;
+    currentInfo.style.display = 'block';
   }
 });
 
@@ -27,7 +35,7 @@ function conectarYListar() {
   socket = io(URL_SERVIDOR);
 
   socket.on('connect', () => {
-    statusMsg.innerText = "Conectado. Obteniendo salas...";
+    statusMsg.innerText = "Conectado. Buscando salas...";
     socket.emit('get_rooms');
   });
 
@@ -36,13 +44,12 @@ function conectarYListar() {
     statusMsg.innerText = "";
   });
   
-  // Soporte para actualizaciones en tiempo real si el popup sigue abierto
   socket.on('rooms_update', (rooms) => {
     mostrarSalas(rooms);
   });
 
   socket.on('connect_error', () => {
-    statusMsg.innerText = "Error de conexión.";
+    statusMsg.innerText = "Error al conectar con fidelizador.online";
   });
 }
 
@@ -51,23 +58,30 @@ function mostrarSalas(rooms) {
   roomsContainer.innerHTML = '';
 
   if (!rooms || rooms.length === 0) {
-    roomsContainer.innerHTML = '<span style="font-size:0.8rem; color:#888">No hay salas disponibles. Contacta al admin.</span>';
+    roomsContainer.innerHTML = '<span style="font-size:0.8rem; color:#888">No hay salas disponibles.</span>';
     return;
   }
 
   rooms.forEach(room => {
-    const btn = document.createElement('button');
-    btn.style.width = "100%";
-    btn.style.padding = "6px";
-    btn.style.cursor = "pointer";
-    btn.style.textAlign = "left";
-    btn.innerText = `${room.name} (${room.count})`; // Nombre (Usuarios)
+    const div = document.createElement('div');
+    div.className = 'room-item';
 
-    btn.addEventListener('click', () => {
+    const spanName = document.createElement('span');
+    spanName.className = 'room-name';
+    spanName.innerText = room.name;
+
+    const spanCount = document.createElement('span');
+    spanCount.className = 'room-count';
+    spanCount.innerText = `${room.count} usu`;
+
+    div.appendChild(spanName);
+    div.appendChild(spanCount);
+
+    div.addEventListener('click', () => {
       guardarYSalir(room.name);
     });
 
-    roomsContainer.appendChild(btn);
+    roomsContainer.appendChild(div);
   });
 }
 
@@ -81,12 +95,17 @@ function guardarYSalir(salaNombre) {
   if (cleanNumero.length < 5) return alert("El número parece inválido.");
 
   chrome.storage.local.set({ 'fid_num': cleanNumero, 'fid_sala': salaNombre }, () => {
-    alert(`Te has unido a la sala "${salaNombre}".\n\nVe a WhatsApp Web y presiona F5 para activar.`);
+    alert(`Te has unido a la sala "${salaNombre}".\n\nSi WhatsApp ya está abierto, recarga la página (F5) para activar.`);
     window.close(); // Cerrar popup
   });
 }
 
 btnUnirte.addEventListener('click', () => {
   if (!inputNumero.value) return alert("Ingresa tu número primero.");
+  // Guardamos el número aunque no elija sala aún, por comodidad
+  const cleanNumero = inputNumero.value.replace(/\D/g, '');
+  if(cleanNumero.length > 5) {
+      chrome.storage.local.set({ 'fid_num': cleanNumero });
+  }
   conectarYListar();
 });

@@ -1,21 +1,129 @@
 <!DOCTYPE html>
-<html>
-<body style="width: 200px; padding: 10px; font-family: sans-serif;">
-  <h3>Configuración</h3>
-  <label>Mi Número (con código país):</label>
-  <input type="text" id="miNumero" placeholder="Ej: 54911223344 o +54 9 11..." style="width:100%">
-  <br><br>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Bot Fidelizador</title>
+  <style>
+    body {
+      width: 280px;
+      padding: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f0f2f5;
+      color: #111b21;
+      margin: 0;
+    }
+    h3 {
+      text-align: center;
+      margin-top: 0;
+      color: #008069;
+      font-weight: 600;
+    }
+    label {
+      font-size: 13px;
+      font-weight: 500;
+      color: #54656f;
+      display: block;
+      margin-bottom: 5px;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #dfe1e5;
+      border-radius: 8px;
+      box-sizing: border-box;
+      font-size: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    input:focus {
+      border-color: #008069;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #008069;
+      color: white;
+      border: none;
+      border-radius: 20px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 15px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+      transition: background-color 0.2s;
+    }
+    button:hover {
+      background-color: #006c59;
+    }
+    #listaSalas {
+      margin-top: 20px;
+      background: white;
+      border-radius: 10px;
+      padding: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      display: none;
+    }
+    .room-item {
+      padding: 10px;
+      border-bottom: 1px solid #f0f2f5;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.2s;
+    }
+    .room-item:last-child {
+      border-bottom: none;
+    }
+    .room-item:hover {
+      background-color: #f5f6f6;
+    }
+    .room-name {
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .room-count {
+      font-size: 12px;
+      color: #8696a0;
+      background: #e9edef;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+    #status {
+      font-size: 12px;
+      color: #667781;
+      text-align: center;
+      margin-top: 15px;
+    }
+    .current-info {
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h3>Fidelizador</h3>
 
-  <button id="btnUnirte" style="width:100%; padding: 8px; background-color: #28a745; color: white; border: none; font-weight: bold; cursor: pointer;">UNIRTE</button>
-
-  <div id="listaSalas" style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 10px; display: none;">
-    <strong>Salas Disponibles:</strong>
-    <div id="roomsContainer" style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
-      <!-- Botones de salas se insertan aquí -->
-    </div>
+  <div class="current-info" id="currentInfo" style="display:none;">
+    <div><strong>Sala:</strong> <span id="savedSala">-</span></div>
+    <div style="margin-top:4px;"><strong>Soy:</strong> <span id="savedNum">-</span></div>
   </div>
 
-  <p id="status" style="font-size: 0.8rem; color: #666; margin-top: 10px;"></p>
+  <label for="miNumero">Tu Número (con país)</label>
+  <input type="text" id="miNumero" placeholder="Ej: 54911223344">
+
+  <button id="btnUnirte">BUSCAR SALAS</button>
+
+  <div id="listaSalas">
+    <div style="font-size:13px; font-weight:600; margin-bottom:10px; color:#008069;">Salas Disponibles</div>
+    <div id="roomsContainer"></div>
+  </div>
+
+  <p id="status"></p>
 
   <script src="socket.io.js"></script>
   <script src="popup.js"></script>
