@@ -11,6 +11,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
+const fs = require("fs");
 
 const app = express();
 const server = http.createServer(app);
@@ -21,6 +22,33 @@ const io = new Server(server, {
 
 // ✅ FORZAMOS 80 (porque tu EasyPanel no está ruteando 3000)
 const PORT = 80;
+
+// --- PERSISTENCIA DE SALAS ---
+const ROOMS_FILE = path.join(__dirname, "rooms.json");
+let allowedRooms = [];
+
+// Cargar salas al inicio
+try {
+  if (fs.existsSync(ROOMS_FILE)) {
+    const data = fs.readFileSync(ROOMS_FILE, "utf-8");
+    allowedRooms = JSON.parse(data || "[]");
+    console.log("📂 Salas cargadas:", allowedRooms);
+  } else {
+    fs.writeFileSync(ROOMS_FILE, "[]");
+  }
+} catch (e) {
+  console.error("❌ Error cargando salas:", e);
+  allowedRooms = [];
+}
+
+function saveRooms() {
+  try {
+    fs.writeFileSync(ROOMS_FILE, JSON.stringify(allowedRooms, null, 2));
+    io.emit("rooms_update", getRoomsWithCounts()); // Notificar cambios a todos
+  } catch (e) {
+    console.error("❌ Error guardando salas:", e);
+  }
+}
 
 // --- LOGS + ERRORES ---
 process.on("uncaughtException", (err) => {
@@ -82,8 +110,50 @@ function actualizarDashboard() {
   io.emit("actualizar_panel", salas);
 }
 
+function getRoomsWithCounts() {
+  return allowedRooms.map(roomName => {
+    const count = salas[roomName] ? salas[roomName].length : 0;
+    return { name: roomName, count: count };
+  });
+}
+
 io.on("connection", (socket) => {
-  logDashboard(`🟢 Socket conectado: ${socket.id}`);
+  // logDashboard(`🟢 Socket conectado: ${socket.id}`); // Demasiado ruido si hay muchos
+
+  // --- ADMIN ---
+  socket.on("admin_login", (creds, callback) => {
+    if (creds.user === "admin" && creds.pass === "Selena") {
+      callback({ success: true });
+    } else {
+      callback({ success: false, msg: "Credenciales incorrectas" });
+    }
+  });
+
+  socket.on("create_room", (roomName) => {
+    const name = String(roomName || "").toUpperCase().trim();
+    if (name && !allowedRooms.includes(name)) {
+      allowedRooms.push(name);
+      saveRooms();
+      logDashboard(`🛠 Sala creada por Admin: ${name}`);
+    }
+  });
+
+  socket.on("delete_room", (roomName) => {
+    const name = String(roomName || "").toUpperCase().trim();
+    if (name && allowedRooms.includes(name)) {
+      allowedRooms = allowedRooms.filter(r => r !== name);
+      saveRooms();
+      logDashboard(`🗑 Sala eliminada por Admin: ${name}`);
+      // Opcional: Desconectar usuarios de esa sala?
+      // Por ahora no, solo se impide que entren nuevos.
+    }
+  });
+
+  // --- EXTENSION / PUBLIC ---
+  socket.on("get_rooms", (cb) => {
+    if (typeof cb === 'function') cb(getRoomsWithCounts());
+    else socket.emit("rooms_list", getRoomsWithCounts());
+  });
 
   socket.on("unirse", (data = {}) => {
     try {
@@ -91,7 +161,14 @@ io.on("connection", (socket) => {
       const miNumero = String(data.miNumero || "").trim();
 
       if (!salaID || !miNumero) {
-        logDashboard("⚠️ unirse(): falta sala o miNumero");
+        // logDashboard("⚠️ unirse(): falta sala o miNumero");
+        return;
+      }
+
+      // 🔒 VERIFICACIÓN DE SALA PERMITIDA
+      if (!allowedRooms.includes(salaID)) {
+        console.log(`⛔ Intento de unirse a sala no permitida: ${salaID}`);
+        socket.emit("error_sala", "La sala no existe o ha sido eliminada.");
         return;
       }
 
@@ -106,6 +183,9 @@ io.on("connection", (socket) => {
       logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
       actualizarDashboard();
 
+      // Notificar a todos que cambiaron los contadores
+      io.emit("rooms_update", getRoomsWithCounts());
+
       iniciarBucleAleatorio(salaID);
     } catch (e) {
       console.error("❌ Error en unirse:", e);
@@ -113,16 +193,21 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", (reason) => {
-    logDashboard(`🔴 Socket desconectado: ${socket.id} (${reason})`);
+    // logDashboard(`🔴 Socket desconectado: ${socket.id} (${reason})`);
 
+    let cambio = false;
     for (const salaID in salas) {
       const antes = salas[salaID].length;
       salas[salaID] = salas[salaID].filter((u) => u.id !== socket.id);
 
       if (salas[salaID].length < antes) {
         logDashboard(`[-] Desconectado un usuario de ${salaID}`);
-        actualizarDashboard();
+        cambio = true;
       }
+    }
+    if (cambio) {
+      actualizarDashboard();
+      io.emit("rooms_update", getRoomsWithCounts());
     }
   });
 });
@@ -135,6 +220,9 @@ function iniciarBucleAleatorio(salaID) {
 
   const ejecutarCiclo = () => {
     try {
+      // Verificar si la sala sigue existiendo en allowedRooms, si no, detener el loop?
+      // Por ahora lo dejamos correr para los que están dentro.
+
       const usuarios = salas[salaID];
 
       if (!usuarios || usuarios.length < 2) {
@@ -185,9 +273,7 @@ function iniciarBucleAleatorio(salaID) {
       const delay = Math.floor(
         Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN
       );
-      logDashboard(
-        `[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`
-      );
+      // logDashboard(`[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`);
       setTimeout(ejecutarCiclo, delay);
     } catch (e) {
       console.error("❌ Error en ejecutarCiclo:", e);
