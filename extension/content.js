@@ -131,15 +131,19 @@ function monitorearSesion() {
         // Buscamos paneles típicos de la interfaz logueada
         const estaLogueado = document.getElementById('pane-side') || document.querySelector('#side');
 
-        // Si aparece el canvas del código QR, es que nos fuimos
-        const canvasQR = document.querySelector('canvas[aria-label="Scan me!"]');
+        // Si aparece CUALQUIER canvas en el body y NO estamos logueados, es el QR casi seguro.
+        // (El chat normal no suele tener un canvas suelto en el body o landing wrapper).
+        const hayCanvas = document.querySelector('canvas');
 
-        if (!estaLogueado && canvasQR) {
+        // También podemos chequear texto de landing si queremos ser más específicos
+        // pero con canvas suele bastar para la landing de WP Web.
+
+        if (!estaLogueado && hayCanvas) {
              console.log("Parece que se cerró la sesión o estamos en el QR.");
              chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
              clearInterval(intervaloMonitor);
         }
-    }, 5000);
+    }, 2000); // Chequeamos más seguido (2s)
 }
 
 // Conexión persistente para que el Service Worker no se duerma
@@ -164,6 +168,19 @@ function mantenerVivaLaConexion() {
 // --- LÓGICA DE AUTOMATIZACIÓN ---
 
 async function abrirChatYEnviar(telefono, mensaje) {
+    // 1. Verificar logueo ANTES de hacer nada.
+    // Si clickeamos el link estando deslogueados, WP Web recarga la página y entramos en loop infinito.
+    const estaLogueado = document.getElementById('pane-side') || document.querySelector('#side');
+    if (!estaLogueado) {
+        console.warn("Detectado intento de envío sin sesión activa. Abortando para evitar recarga.");
+        // Forzamos chequeo de logout inmediato
+        const hayCanvas = document.querySelector('canvas');
+        if (hayCanvas) {
+            chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
+        }
+        return; // Salimos sin hacer nada
+    }
+
     console.log(`Iniciando proceso para: ${telefono}`);
 
     // Guardo esto por seguridad, por si la página recarga en el medio
