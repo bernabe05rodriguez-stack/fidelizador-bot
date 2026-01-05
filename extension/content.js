@@ -5,35 +5,47 @@
 // Iniciar Keep-Alive y listeners
 setTimeout(() => iniciar(), 3000);
 
+let keepAlivePort = null;
+
 function iniciar() {
     chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
-        // Validación básica
         if (!data.fid_num || !data.fid_sala) {
             console.log("Fidelizador: Falta configurar número y sala en el icono.");
             return;
         }
 
         console.log("✅ Fidelizador iniciado en Content Script. Conectando a Background...");
+        conectarKeepAlive();
 
-        // 1. Conectar a Background para mantener vivo el Service Worker
-        try {
-            const port = chrome.runtime.connect({ name: "keep-alive" });
-            port.onDisconnect.addListener(() => {
-                console.log("⚠️ Desconectado del Background. Reintentando en 5s...");
-                setTimeout(iniciar, 5000);
+        // Escuchar mensajes (solo una vez para evitar duplicados si 'iniciar' se llama varias veces)
+        if (!window.hasFidelizadorListener) {
+            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+                if (message.type === 'ORDEN' && message.payload) {
+                    console.log(`🤖 ORDEN RECIBIDA (desde Background): Escribir a ${message.payload.destino}`);
+                    abrirChatNuevo(message.payload.destino, message.payload.mensaje);
+                }
             });
-        } catch (e) {
-            console.error("Error conectando a background:", e);
+            window.hasFidelizadorListener = true;
         }
-
-        // 2. Escuchar mensajes del Background (órdenes del servidor)
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-            if (message.type === 'ORDEN' && message.payload) {
-                console.log(`🤖 ORDEN RECIBIDA (desde Background): Escribir a ${message.payload.destino}`);
-                abrirChatNuevo(message.payload.destino, message.payload.mensaje);
-            }
-        });
     });
+}
+
+function conectarKeepAlive() {
+    if (keepAlivePort) {
+        try { keepAlivePort.disconnect(); } catch(e) {}
+    }
+
+    try {
+        keepAlivePort = chrome.runtime.connect({ name: "keep-alive" });
+        keepAlivePort.onDisconnect.addListener(() => {
+            console.log("⚠️ Desconectado del Background. Reintentando en 10s...");
+            keepAlivePort = null;
+            setTimeout(conectarKeepAlive, 10000);
+        });
+    } catch (e) {
+        console.error("Error conectando a background:", e);
+        setTimeout(conectarKeepAlive, 10000);
+    }
 }
 
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
