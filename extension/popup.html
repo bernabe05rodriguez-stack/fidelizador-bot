@@ -108,19 +108,28 @@
 <body>
   <h3>Fidelizador</h3>
 
-  <div class="current-info" id="currentInfo" style="display:none;">
-    <div><strong>Sala:</strong> <span id="savedSala">-</span></div>
-    <div style="margin-top:4px;"><strong>Soy:</strong> <span id="savedNum">-</span></div>
+  <div id="controlsSection" style="display:none;">
+    <div class="current-info">
+      <div style="text-align:center; font-weight:bold; margin-bottom:5px; color:#008069;">ESTADO ACTIVO</div>
+      <div><strong>Sala:</strong> <span id="savedSala">-</span></div>
+      <div style="margin-top:4px;"><strong>Soy:</strong> <span id="savedNum">-</span></div>
+      <div style="margin-top:4px;"><strong>Estado:</strong> <span id="statusLabel" style="color:green; font-weight:bold;">ACTIVO</span></div>
+    </div>
+
+    <button id="btnPausar" style="background-color: #f59e0b;">PAUSAR</button>
+    <button id="btnSalir" style="background-color: #ef4444; margin-top:10px;">CANCELAR / SALIR</button>
   </div>
 
-  <label for="miNumero">Tu Número (con país)</label>
-  <input type="text" id="miNumero" placeholder="Ej: 54911223344">
+  <div id="joinSection">
+    <label for="miNumero">Tu Número (con país)</label>
+    <input type="text" id="miNumero" placeholder="Ej: 54911223344">
 
-  <button id="btnUnirte">BUSCAR SALAS</button>
+    <button id="btnUnirte">BUSCAR SALAS</button>
 
-  <div id="listaSalas">
-    <div style="font-size:13px; font-weight:600; margin-bottom:10px; color:#008069;">Salas Disponibles</div>
-    <div id="roomsContainer"></div>
+    <div id="listaSalas">
+      <div style="font-size:13px; font-weight:600; margin-bottom:10px; color:#008069;">Salas Disponibles</div>
+      <div id="roomsContainer"></div>
+    </div>
   </div>
 
   <p id="status"></p>

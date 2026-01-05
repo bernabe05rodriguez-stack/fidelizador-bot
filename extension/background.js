@@ -98,12 +98,46 @@ function enviarAWhatsApp(msg) {
 // --- MONITOR DE STORAGE ---
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
-    chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
-      if (data.fid_sala && data.fid_num) {
-        conectarSocket(data.fid_sala, data.fid_num);
-      } else {
-        desconectarSocket();
+
+    // 1. CAMBIO DE SALA/NUMERO (Conexión/Desconexión)
+    if (changes.fid_sala || changes.fid_num) {
+      chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
+        if (data.fid_sala && data.fid_num) {
+          conectarSocket(data.fid_sala, data.fid_num);
+        } else {
+          // Si tenía socket y ahora no hay datos, es un logout explicito
+          if (socket && socket.connected) {
+             socket.emit('abandonar'); // Avisar al server antes de cortar
+             setTimeout(desconectarSocket, 200);
+          } else {
+             desconectarSocket();
+          }
+        }
+      });
+    }
+
+    // 2. CAMBIO DE PAUSA
+    if (changes.fid_paused) {
+      const nuevoEstado = changes.fid_paused.newValue;
+      if (socket && socket.connected) {
+        console.log(`[Background] Enviando pausa: ${nuevoEstado}`);
+        socket.emit('pausar', nuevoEstado);
       }
+    }
+  }
+});
+
+// --- MENSAJES DESDE CONTENT SCRIPT (Logout detectado) ---
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'LOGOUT_DETECTED') {
+    console.log("[Background] LOGOUT DETECTED -> Limpiando sesión");
+
+    // Avisar al server (si es posible)
+    if (socket && socket.connected) socket.emit('abandonar');
+
+    // Limpiar storage para evitar reconexión
+    chrome.storage.local.remove(['fid_sala', 'fid_paused'], () => {
+       desconectarSocket();
     });
   }
 });

@@ -72,8 +72,8 @@ app.get("/", (req, res) => {
 });
 
 // --- ⚡ CONFIGURACIÓN DE VELOCIDAD ⚡ ---
-const TIEMPO_MIN = 15000; // 15 segundos
-const TIEMPO_MAX = 25000; // 25 segundos
+const TIEMPO_MIN = 10000; // 10 segundos
+const TIEMPO_MAX = 20000; // 20 segundos
 
 const FRASES_INICIO = [
   "Hola, estás?",
@@ -98,7 +98,6 @@ const FRASES_RESPUESTA = [
 ];
 
 let salas = {};
-let respuestasPendientes = {};
 const loopsActivos = {};
 
 function logDashboard(msg) {
@@ -177,8 +176,11 @@ io.on("connection", (socket) => {
       if (!salas[salaID]) salas[salaID] = [];
 
       const existe = salas[salaID].find((u) => u.numero === miNumero);
-      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero });
-      else existe.id = socket.id;
+      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero, paused: false });
+      else {
+        existe.id = socket.id;
+        existe.paused = false; // Resetear pausa al reconectar
+      }
 
       logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
       actualizarDashboard();
@@ -192,25 +194,43 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", (reason) => {
-    // logDashboard(`🔴 Socket desconectado: ${socket.id} (${reason})`);
-
-    let cambio = false;
+  socket.on("pausar", (estado) => {
+    // Buscar usuario y marcarlo
     for (const salaID in salas) {
-      const antes = salas[salaID].length;
-      salas[salaID] = salas[salaID].filter((u) => u.id !== socket.id);
-
-      if (salas[salaID].length < antes) {
-        logDashboard(`[-] Desconectado un usuario de ${salaID}`);
-        cambio = true;
+      const usuario = salas[salaID].find((u) => u.id === socket.id);
+      if (usuario) {
+        usuario.paused = estado;
+        logDashboard(`⏸ Usuario ${usuario.numero} pausa: ${estado}`);
       }
     }
-    if (cambio) {
-      actualizarDashboard();
-      io.emit("rooms_update", getRoomsWithCounts());
-    }
+  });
+
+  socket.on("abandonar", () => {
+    logDashboard(`👋 Usuario solicita abandonar: ${socket.id}`);
+    eliminarUsuario(socket.id);
+  });
+
+  socket.on("disconnect", (reason) => {
+    eliminarUsuario(socket.id);
   });
 });
+
+function eliminarUsuario(socketId) {
+  let cambio = false;
+  for (const salaID in salas) {
+    const antes = salas[salaID].length;
+    salas[salaID] = salas[salaID].filter((u) => u.id !== socketId);
+
+    if (salas[salaID].length < antes) {
+      logDashboard(`[-] Usuario fuera de sala ${salaID}`);
+      cambio = true;
+    }
+  }
+  if (cambio) {
+    actualizarDashboard();
+    io.emit("rooms_update", getRoomsWithCounts());
+  }
+}
 
 function iniciarBucleAleatorio(salaID) {
   if (loopsActivos[salaID]) return;
@@ -220,60 +240,58 @@ function iniciarBucleAleatorio(salaID) {
 
   const ejecutarCiclo = () => {
     try {
-      // Verificar si la sala sigue existiendo en allowedRooms, si no, detener el loop?
-      // Por ahora lo dejamos correr para los que están dentro.
+      const todosUsuarios = salas[salaID];
 
-      const usuarios = salas[salaID];
+      // Filtrar usuarios activos (no pausados)
+      const activos = (todosUsuarios || []).filter(u => !u.paused);
 
-      if (!usuarios || usuarios.length < 2) {
+      if (activos.length < 2) {
+        // Esperamos un poco y reintentamos
         setTimeout(ejecutarCiclo, 5000);
         return;
       }
 
-      const deudores = usuarios.filter((u) => respuestasPendientes[u.numero]);
+      // ELEGIR PAREJA ALEATORIA (SIMULTÁNEO)
+      const emisor = activos[Math.floor(Math.random() * activos.length)];
+      let receptor = activos[Math.floor(Math.random() * activos.length)];
 
-      if (deudores.length > 0) {
-        // RESPONDER
-        const emisor = deudores[Math.floor(Math.random() * deudores.length)];
-        const destino = respuestasPendientes[emisor.numero];
-        const receptor = usuarios.find((u) => u.numero === destino);
+      // Asegurar que no sea el mismo número
+      // (Usamos while con limite para evitar loops infinitos si solo hay 1 válido repetido por error)
+      let intentos = 0;
+      while (receptor.numero === emisor.numero && intentos < 10) {
+        receptor = activos[Math.floor(Math.random() * activos.length)];
+        intentos++;
+      }
 
-        if (receptor) {
-          const texto =
-            FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
-          logDashboard(`↺ RESPUESTA: ${emisor.numero} -> ${destino}`);
-          io.to(emisor.id).emit("orden_servidor", {
+      if (receptor.numero !== emisor.numero) {
+        // 1. Emisor le habla a Receptor
+        const texto1 = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
+        io.to(emisor.id).emit("orden_servidor", {
             accion: "escribir",
             destino: receptor.numero,
-            mensaje: texto,
-          });
-        }
-
-        delete respuestasPendientes[emisor.numero];
-      } else {
-        // INICIAR
-        const emisor = usuarios[Math.floor(Math.random() * usuarios.length)];
-        let receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
-        while (receptor.id === emisor.id) {
-          receptor = usuarios[Math.floor(Math.random() * usuarios.length)];
-        }
-
-        const texto =
-          FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
-        logDashboard(`➤ INICIO: ${emisor.numero} -> ${receptor.numero}`);
-        io.to(emisor.id).emit("orden_servidor", {
-          accion: "escribir",
-          destino: receptor.numero,
-          mensaje: texto,
+            mensaje: texto1,
         });
 
-        respuestasPendientes[receptor.numero] = emisor.numero;
+        // 2. Receptor le habla a Emisor (simultaneo, frase aleatoria)
+        const texto2 = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
+        // Nota: El usuario pidió simplificar, mensajes aleatorios. Usamos frases de respuesta o inicio indistintamente?
+        // El usuario dijo "mensajes aleatorios". Usaremos un mix o lo que sea.
+        // Vamos a usar FRASES_INICIO también para que parezca charla nueva, o una de RESPUESTA.
+        // El código anterior usaba FRASES_RESPUESTA solo si era respuesta.
+        // Usemos FRASES_INICIO para ambos para que sea charla proactiva mutua, o un random de ambas.
+
+        io.to(receptor.id).emit("orden_servidor", {
+            accion: "escribir",
+            destino: emisor.numero,
+            mensaje: texto2,
+        });
+
+        logDashboard(`➤ INTERACCIÓN DOBLE: ${emisor.numero} ↔ ${receptor.numero}`);
       }
 
       const delay = Math.floor(
         Math.random() * (TIEMPO_MAX - TIEMPO_MIN + 1) + TIEMPO_MIN
       );
-      // logDashboard(`[Reloj] Sala ${salaID}: Próximo mensaje en ${Math.round(delay / 1000)}s`);
       setTimeout(ejecutarCiclo, delay);
     } catch (e) {
       console.error("❌ Error en ejecutarCiclo:", e);
