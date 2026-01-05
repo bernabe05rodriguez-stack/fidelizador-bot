@@ -6,6 +6,7 @@
 setTimeout(() => iniciar(), 3000);
 
 let keepAlivePort = null;
+let monitorInterval = null;
 
 function iniciar() {
     chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
@@ -16,6 +17,7 @@ function iniciar() {
 
         console.log("✅ Fidelizador iniciado en Content Script. Conectando a Background...");
         conectarKeepAlive();
+        iniciarMonitorSesion();
 
         // Escuchar mensajes (solo una vez para evitar duplicados si 'iniciar' se llama varias veces)
         if (!window.hasFidelizadorListener) {
@@ -28,6 +30,23 @@ function iniciar() {
             window.hasFidelizadorListener = true;
         }
     });
+}
+
+function iniciarMonitorSesion() {
+    if (monitorInterval) clearInterval(monitorInterval);
+    monitorInterval = setInterval(() => {
+        // Verificar si estamos logueados buscando elementos clave de la UI
+        const isLogged = document.getElementById('pane-side') || document.querySelector('#side');
+
+        // También podemos chequear si existe el canvas del QR (lo cual indica NO logueado)
+        const qrCanvas = document.querySelector('canvas[aria-label="Scan me!"]');
+
+        if (!isLogged && qrCanvas) {
+             console.log("⚠️ DETECTADO LOGOUT O PANTALLA DE QR.");
+             chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
+             clearInterval(monitorInterval); // Dejar de monitorear
+        }
+    }, 5000);
 }
 
 function conectarKeepAlive() {
@@ -50,7 +69,15 @@ function conectarKeepAlive() {
 
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
 async function abrirChatNuevo(telefono, mensaje) {
-    // 1. BUSCAR EN LA BARRA LATERAL
+    // 1. LIMPIAR BÚSQUEDA PREVIA (IMPORTANTE)
+    // A veces el botón de "x" (borrar búsqueda) está visible
+    const btnBorrarBusqueda = document.querySelector('span[data-icon="x-alt"]') || document.querySelector('span[data-icon="search-container-clean"]');
+    if (btnBorrarBusqueda) {
+        btnBorrarBusqueda.click();
+        await esperar(500);
+    }
+
+    // 2. BUSCAR EN LA BARRA LATERAL
     const buscador = document.querySelector('div[contenteditable="true"][data-tab="3"]');
     if(!buscador) return console.error("No encuentro el buscador de WhatsApp");
     
@@ -58,44 +85,71 @@ async function abrirChatNuevo(telefono, mensaje) {
     buscador.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('delete', false, null);
+
+    // Escribir número char a char a veces ayuda, pero insertText suele ir bien
     document.execCommand('insertText', false, telefono);
     
     // Esperar a que WhatsApp procese el número
-    await esperar(1500);
+    await esperar(1000);
 
-    // 2. PRESIONAR ENTER (Truco para buscar en la base de datos global)
+    // 3. PRESIONAR ENTER (Para forzar búsqueda en la DB)
     const enterEvent = new KeyboardEvent('keydown', {
         bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
     });
     buscador.dispatchEvent(enterEvent);
 
-    // Esperar a que cargue el chat (o aparezca el botón de buscar)
-    await esperar(3000);
+    // Esperar resultados
+    await esperar(2500);
 
-    // Si aparece un resultado en la lista (el contacto), le damos click
-    const primerResultado = document.querySelector('div[role="listitem"]'); 
-    if(primerResultado) {
-        primerResultado.click();
-        await esperar(2000); // Esperar que abra el chat
+    // 4. SELECCIONAR RESULTADO
+    // Buscamos items de la lista. Ignoramos encabezados.
+    // El primer resultado suele ser el correcto.
+    const resultados = document.querySelectorAll('div[role="listitem"]');
+    if (resultados && resultados.length > 0) {
+        // Hacemos click en el primero
+        resultados[0].click();
+        // A veces el click nativo no va bien en React, probamos dispatchEvent mouse
+        const mouseEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
+        resultados[0].dispatchEvent(mouseEvent);
+
+        console.log("Click en resultado de búsqueda");
+    } else {
+        console.warn("No se encontraron resultados en la búsqueda (o ya está abierto).");
+        // A veces si el chat ya estaba abierto, no aparece en lista sino que se queda ahí.
+        // Pero asumimos que queremos cambiar de chat.
     }
 
-    // 3. ESCRIBIR EL MENSAJE Y ENVIAR
+    await esperar(2000); // Esperar que cargue el panel de chat
+
+    // 5. ESCRIBIR EL MENSAJE
     const cajaChat = document.querySelector('div[contenteditable="true"][data-tab="10"]');
     if(cajaChat) {
         cajaChat.focus();
-        document.execCommand('insertText', false, mensaje);
-        await esperar(1000); // Pausa humana
         
-        // Buscar botón enviar
+        // Escribir mensaje
+        document.execCommand('insertText', false, mensaje);
+        await esperar(800);
+
+        // 6. ENVIAR (Click + Enter por si acaso)
         const btnEnviar = document.querySelector('button[aria-label="Send"]') || 
                           document.querySelector('span[data-icon="send"]');
         
         if(btnEnviar) {
-            btnEnviar.click();
-            console.log("✅ Mensaje enviado.");
+            // Click en el contenedor del icono a veces funciona mejor si el icono es un span
+            // Buscamos el padre button si es un span
+            const clickable = btnEnviar.closest('button') || btnEnviar;
+            clickable.click();
+            console.log("✅ Mensaje enviado (click).");
+        } else {
+            // Intentar ENTER en la caja de chat
+            const enterSend = new KeyboardEvent('keydown', {
+                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
+            });
+            cajaChat.dispatchEvent(enterSend);
+            console.log("✅ Mensaje enviado (enter).");
         }
     } else {
-        console.error("❌ No se pudo abrir el chat.");
+        console.error("❌ No se pudo abrir el chat (no veo la caja de texto).");
     }
 }
 
