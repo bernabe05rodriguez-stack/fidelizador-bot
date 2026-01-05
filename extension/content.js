@@ -70,7 +70,6 @@ function conectarKeepAlive() {
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
 async function abrirChatNuevo(telefono, mensaje) {
     // 1. LIMPIAR BÚSQUEDA PREVIA (IMPORTANTE)
-    // A veces el botón de "x" (borrar búsqueda) está visible
     const btnBorrarBusqueda = document.querySelector('span[data-icon="x-alt"]') || document.querySelector('span[data-icon="search-container-clean"]');
     if (btnBorrarBusqueda) {
         btnBorrarBusqueda.click();
@@ -81,16 +80,18 @@ async function abrirChatNuevo(telefono, mensaje) {
     const buscador = document.querySelector('div[contenteditable="true"][data-tab="3"]');
     if(!buscador) return console.error("No encuentro el buscador de WhatsApp");
     
-    // Limpiar y escribir el número
+    // --- FIX: LIMPIEZA ROBUSTA ---
+    // Usamos textContent para forzar vaciado visual antes del insertText
     buscador.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
+    buscador.textContent = '';
+    // Pequeña espera para que React note el cambio si es necesario,
+    // aunque execCommand insertText suele ser lo que React "escucha".
+    await esperar(50);
 
-    // Escribir número char a char a veces ayuda, pero insertText suele ir bien
     document.execCommand('insertText', false, telefono);
     
     // Esperar a que WhatsApp procese el número
-    await esperar(1000);
+    await esperar(1200);
 
     // 3. PRESIONAR ENTER (Para forzar búsqueda en la DB)
     const enterEvent = new KeyboardEvent('keydown', {
@@ -99,27 +100,28 @@ async function abrirChatNuevo(telefono, mensaje) {
     buscador.dispatchEvent(enterEvent);
 
     // Esperar resultados
-    await esperar(2500);
+    await esperar(3000);
 
     // 4. SELECCIONAR RESULTADO
-    // Buscamos items de la lista. Ignoramos encabezados.
-    // El primer resultado suele ser el correcto.
     const resultados = document.querySelectorAll('div[role="listitem"]');
     if (resultados && resultados.length > 0) {
-        // Hacemos click en el primero
-        resultados[0].click();
-        // A veces el click nativo no va bien en React, probamos dispatchEvent mouse
-        const mouseEvent = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
-        resultados[0].dispatchEvent(mouseEvent);
-
-        console.log("Click en resultado de búsqueda");
+        console.log("Clickeando resultado...");
+        // --- FIX: CLICK ROBUSTO (Mousedown -> Mouseup -> Click) ---
+        simularClick(resultados[0]);
     } else {
-        console.warn("No se encontraron resultados en la búsqueda (o ya está abierto).");
-        // A veces si el chat ya estaba abierto, no aparece en lista sino que se queda ahí.
-        // Pero asumimos que queremos cambiar de chat.
+        console.warn("No se encontraron resultados en la búsqueda.");
     }
 
-    await esperar(2000); // Esperar que cargue el panel de chat
+    await esperar(2500); // Esperar cambio de chat
+
+    // --- FIX: SAFETY CHECK (Evitar escribir si la búsqueda sigue activa) ---
+    // Si el buscador todavía tiene texto, significa que NO se abrió el chat.
+    if (buscador.textContent && buscador.textContent.trim().length > 0) {
+        console.error("⛔ ABORTANDO: La búsqueda sigue activa. El chat no se abrió correctamente.");
+        // Intentamos limpiar para la próxima
+        buscador.textContent = '';
+        return;
+    }
 
     // 5. ESCRIBIR EL MENSAJE
     const cajaChat = document.querySelector('div[contenteditable="true"][data-tab="10"]');
@@ -154,3 +156,15 @@ async function abrirChatNuevo(telefono, mensaje) {
 }
 
 function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function simularClick(elemento) {
+    const eventos = ['mousedown', 'mouseup', 'click'];
+    eventos.forEach(tipo => {
+        const evento = new MouseEvent(tipo, {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        });
+        elemento.dispatchEvent(evento);
+    });
+}
