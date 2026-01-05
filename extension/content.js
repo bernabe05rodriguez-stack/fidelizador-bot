@@ -83,9 +83,9 @@ function conectarKeepAlive() {
 
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
 async function abrirChatNuevo(telefono, mensaje) {
-    console.log(`🤖 Iniciando chat con ${telefono} (Método URL)...`);
+    console.log(`🤖 Iniciando chat con ${telefono} (Método Link Injection)...`);
 
-    // Guardar trabajo pendiente para procesar tras recarga
+    // Guardar trabajo pendiente (Backup por si hay recarga)
     await chrome.storage.local.set({
         pending_job: {
             telefono,
@@ -97,12 +97,24 @@ async function abrirChatNuevo(telefono, mensaje) {
     // Limpiar número (solo dígitos)
     const cleanPhone = telefono.replace(/\D/g, '');
 
-    // Navegar a la URL de envío directo
-    // Esto provocará una recarga de WhatsApp Web
-    const url = `https://web.whatsapp.com/send?phone=${cleanPhone}`;
-    console.log(`Navegando a: ${url}`);
+    // Intentar navegación interna sin recarga mediante click en link
+    // Esto aprovecha el router interno de WhatsApp si es posible
+    const link = document.createElement('a');
+    link.href = `https://web.whatsapp.com/send?phone=${cleanPhone}`;
+    link.style.display = 'none';
+    document.body.appendChild(link);
 
-    window.location.href = url;
+    console.log(`Clicking internal link to: ${cleanPhone}`);
+    link.click();
+
+    // Limpieza
+    setTimeout(() => {
+        if (link.parentNode) link.parentNode.removeChild(link);
+    }, 1000);
+
+    // Intentamos procesar inmediatamente (si no hubo recarga)
+    // Si hubo recarga, checkPendingJob lo retomará.
+    procesarEnvio(mensaje);
 }
 
 function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -156,8 +168,8 @@ async function procesarEnvio(mensaje) {
     // Pegar mensaje (comando nativo funciona mejor que manipular value en React)
     document.execCommand('insertText', false, mensaje);
 
-    // Esperar 2-5s (Pedido por usuario)
-    const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+    // Esperar 4-7s (Pedido por usuario: "dale mas tiempo")
+    const delay = Math.floor(Math.random() * (7000 - 4000 + 1)) + 4000;
     console.log(`Waiting ${delay}ms with message pasted...`);
     await esperar(delay);
 
@@ -174,6 +186,9 @@ async function procesarEnvio(mensaje) {
         cajaChat.dispatchEvent(enterSend);
     }
     console.log("✅ Mensaje enviado (Lógica nueva).");
+
+    // Limpiar trabajo una vez procesado con éxito
+    chrome.storage.local.remove('pending_job');
 }
 
 function waitForElement(selector, timeout) {
