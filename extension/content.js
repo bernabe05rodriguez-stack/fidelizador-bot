@@ -92,15 +92,7 @@ async function abrirChatNuevo(telefono, mensaje) {
     if(!buscador) return console.error("No encuentro el buscador de WhatsApp");
     
     // --- FIX: LIMPIEZA ROBUSTA ---
-    buscador.focus();
-    // Intento 1: Select All + Delete (Standard)
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-
-    // Intento 2: Fallback manual
-    if(buscador.textContent) buscador.textContent = '';
-
-    await esperar(200);
+    await limpiarBuscador(buscador);
 
     document.execCommand('insertText', false, telefono);
     
@@ -170,6 +162,38 @@ async function abrirChatNuevo(telefono, mensaje) {
 }
 
 function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function limpiarBuscador(buscador) {
+    buscador.focus();
+
+    // Estrategia 1: Reemplazar todo por un espacio y luego borrarlo
+    // Esto fuerza a React a registrar un cambio de input
+    document.execCommand('selectAll', false, null);
+    await esperar(50);
+    document.execCommand('insertText', false, ' ');
+    await esperar(50);
+    document.execCommand('selectAll', false, null);
+    await esperar(50);
+    document.execCommand('delete', false, null);
+    await esperar(100);
+
+    // Estrategia 2: Si queda texto, forzar vaciado y disparar evento de input
+    if (buscador.textContent && buscador.textContent.length > 0) {
+        console.warn("Limpieza standard falló, forzando vaciado...");
+        buscador.textContent = '';
+
+        // Simular evento de input para avisar a React
+        const inputEvent = new InputEvent('input', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'deleteContentBackward',
+            data: null
+        });
+        buscador.dispatchEvent(inputEvent);
+    }
+
+    await esperar(150);
+}
 
 function simularClick(elemento) {
     const eventos = ['mousedown', 'mouseup', 'click'];
