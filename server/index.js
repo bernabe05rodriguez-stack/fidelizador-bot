@@ -176,10 +176,11 @@ io.on("connection", (socket) => {
       if (!salas[salaID]) salas[salaID] = [];
 
       const existe = salas[salaID].find((u) => u.numero === miNumero);
-      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero, paused: false });
+      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero, paused: false, joinedAt: Date.now() });
       else {
         existe.id = socket.id;
         existe.paused = false; // Resetear pausa al reconectar
+        existe.joinedAt = Date.now(); // Reiniciar timer al reconectar
       }
 
       logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
@@ -242,8 +243,8 @@ function iniciarBucleAleatorio(salaID) {
     try {
       const todosUsuarios = salas[salaID];
 
-      // Filtrar usuarios activos (no pausados)
-      const activos = (todosUsuarios || []).filter(u => !u.paused);
+      // Filtrar usuarios activos (no pausados) y que lleven más de 5s conectados
+      const activos = (todosUsuarios || []).filter(u => !u.paused && (Date.now() - (u.joinedAt || 0) > 5000));
 
       if (activos.length < 2) {
         // Esperamos un poco y reintentamos
