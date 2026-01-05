@@ -1,8 +1,19 @@
 // background.js - Service Worker
+
+// --- GLOBAL ERROR HANDLING ---
+self.addEventListener('error', (event) => {
+  console.error("[Background] Uncaught Error:", event.error || event.message);
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+  console.error("[Background] Unhandled Rejection:", event.reason);
+});
+
+// --- IMPORT SOCKET.IO ---
 try {
   importScripts('socket.io.js');
 } catch (e) {
-  console.error("Error importando socket.io.js:", e);
+  console.error("[Background] CRITICAL: Failed to import socket.io.js", e);
 }
 
 const URL_SERVIDOR = "http://fidelizador.online";
@@ -12,8 +23,12 @@ let currentNumero = null;
 
 // --- GESTIÓN DE CONEXIÓN SOCKET.IO ---
 function conectarSocket(sala, numero) {
+  if (typeof io === 'undefined') {
+    console.error("[Background] CRITICAL: 'io' is not defined. Cannot connect.");
+    return;
+  }
+
   if (socket && socket.connected) {
-    // Si ya estamos conectados y son los mismos datos, no hacer nada
     if (currentSala === sala && currentNumero === numero) return;
     socket.disconnect();
   }
@@ -23,29 +38,38 @@ function conectarSocket(sala, numero) {
 
   console.log(`[Background] Conectando a ${URL_SERVIDOR} como ${numero} en sala ${sala}`);
 
-  // Configurar nueva conexión
-  socket = io(URL_SERVIDOR, {
-    reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    randomizationFactor: 0.5
-  });
+  try {
+    // Configurar nueva conexión FORZANDO WEBSOCKET
+    socket = io(URL_SERVIDOR, {
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      randomizationFactor: 0.5,
+      transports: ['websocket'], // IMPORTANT: Force WebSocket to avoid XHR/Polling issues in SW
+      forceNew: true
+    });
 
-  socket.on('connect', () => {
-    console.log("[Background] Socket conectado ID:", socket.id);
-    // Unirse a la sala
-    socket.emit('unirse', { sala: sala, miNumero: numero });
-  });
+    socket.on('connect', () => {
+      console.log("[Background] Socket conectado ID:", socket.id);
+      socket.emit('unirse', { sala: sala, miNumero: numero });
+    });
 
-  socket.on('orden_servidor', (msg) => {
-    console.log("[Background] Orden recibida:", msg);
-    // Reenviar a la pestaña activa de WhatsApp
-    enviarAWhatsApp(msg);
-  });
+    socket.on('connect_error', (err) => {
+      console.error("[Background] Connection Error:", err.message);
+    });
 
-  socket.on('disconnect', (reason) => {
-    console.log("[Background] Desconectado:", reason);
-  });
+    socket.on('orden_servidor', (msg) => {
+      console.log("[Background] Orden recibida:", msg);
+      enviarAWhatsApp(msg);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log("[Background] Desconectado:", reason);
+    });
+
+  } catch (e) {
+    console.error("[Background] Exception while creating socket:", e);
+  }
 }
 
 function desconectarSocket() {
@@ -59,15 +83,14 @@ function desconectarSocket() {
 
 // --- COMUNICACIÓN CON CONTENT SCRIPT ---
 function enviarAWhatsApp(msg) {
-  // Buscar pestañas de WhatsApp Web
   chrome.tabs.query({ url: "https://web.whatsapp.com/*" }, (tabs) => {
     if (tabs && tabs.length > 0) {
       tabs.forEach(tab => {
         chrome.tabs.sendMessage(tab.id, { type: 'ORDEN', payload: msg })
-          .catch(err => console.log("Error enviando a tab:", err)); // Ignorar si tab no listo
+          .catch(err => console.log("Error enviando a tab (tab cerrada?):", err));
       });
     } else {
-      console.log("⚠️ No hay pestañas de WhatsApp abiertas para ejecutar la orden.");
+      console.log("⚠️ No hay pestañas de WhatsApp abiertas.");
     }
   });
 }
@@ -94,7 +117,7 @@ chrome.runtime.onStartup.addListener(() => {
   });
 });
 
-// También al instalar/recargar extensión
+// Al instalar/recargar extensión
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
     if (data.fid_sala && data.fid_num) {
@@ -103,22 +126,22 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// --- KEEP ALIVE (Service Worker Hack) ---
-// Mantener vivo el SW mientras haya una conexión entrante desde el content script
+// --- KEEP ALIVE ---
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "keep-alive") {
-    console.log("[Background] Keep-Alive conectado");
-    port.onDisconnect.addListener(() => {
-      console.log("[Background] Keep-Alive desconectado");
-    });
+    // console.log("[Background] Keep-Alive ping received");
 
-    // Si conectamos desde content script, aseguramos que el socket esté activo
+    // Check connection on keep-alive
     chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
         if (data.fid_sala && data.fid_num) {
           if (!socket || !socket.connected) {
              conectarSocket(data.fid_sala, data.fid_num);
           }
         }
+    });
+
+    port.onDisconnect.addListener(() => {
+      // console.log("[Background] Keep-Alive port closed");
     });
   }
 });
