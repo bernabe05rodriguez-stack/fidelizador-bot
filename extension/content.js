@@ -30,6 +30,9 @@ function iniciar() {
         conectarKeepAlive();
         iniciarMonitorSesion();
 
+        // Verificar si hay trabajo pendiente tras recarga (NUEVA LÓGICA)
+        checkPendingJob();
+
         // Escuchar mensajes (solo una vez para evitar duplicados si 'iniciar' se llama varias veces)
         if (!window.hasFidelizadorListener) {
             chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -80,94 +83,26 @@ function conectarKeepAlive() {
 
 // --- FUNCIÓN DE CONTROL DE WHATSAPP ---
 async function abrirChatNuevo(telefono, mensaje) {
-    console.log(`🤖 Iniciando chat con ${telefono}...`);
+    console.log(`🤖 Iniciando chat con ${telefono} (Método URL)...`);
 
-    // 1. ABRIR NUEVO CHAT (Ctrl+Alt+N)
-    const newChatEvent = new KeyboardEvent('keydown', {
-        bubbles: true, cancelable: true,
-        key: 'n', code: 'KeyN',
-        ctrlKey: true, altKey: true
+    // Guardar trabajo pendiente para procesar tras recarga
+    await chrome.storage.local.set({
+        pending_job: {
+            telefono,
+            mensaje,
+            timestamp: Date.now()
+        }
     });
-    document.body.dispatchEvent(newChatEvent);
-    
-    // Esperar a que se abra el panel y cargue el input
-    await esperar(1000);
 
-    // 2. PEGAR NUMERO
-    // Intentamos buscar el input visible en el panel de nuevo chat
-    // Normalmente el foco se va ahí automáticamente.
-    let searchInput = document.activeElement;
-    if (!searchInput || !searchInput.getAttribute('contenteditable')) {
-        // Fallback: buscamos input data-tab="3" que debería ser el del drawer si está abierto
-        const possibleInputs = document.querySelectorAll('div[contenteditable="true"][data-tab="3"]');
-        // Si hay varios, intentamos el último (usualmente el drawer está al final) o el que sea visible
-        if (possibleInputs.length > 0) {
-            searchInput = possibleInputs[possibleInputs.length - 1]; // Heurística
-            searchInput.focus();
-        } else {
-            console.warn("No encontré input editable, intentando escribir en el elemento activo...");
-        }
-    }
+    // Limpiar número (solo dígitos)
+    const cleanPhone = telefono.replace(/\D/g, '');
 
-    // Pegar número
-    document.execCommand('insertText', false, telefono);
+    // Navegar a la URL de envío directo
+    // Esto provocará una recarga de WhatsApp Web
+    const url = `https://web.whatsapp.com/send?phone=${cleanPhone}`;
+    console.log(`Navegando a: ${url}`);
 
-    // 3. ESPERAR 8 SEGUNDOS (Pedido por usuario)
-    console.log("Esperando 8s para carga...");
-    await esperar(8000);
-
-    // 4. SELECCIONAR CHAT
-    // Buscamos resultados visibles. El drawer de nuevo chat suele listar items con role="listitem"
-    const resultados = document.querySelectorAll('div[role="listitem"]');
-
-    if (resultados && resultados.length > 0) {
-        console.log("Seleccionando chat...");
-        // Click en el primer resultado (asumiendo que es el contacto buscado)
-        simularClick(resultados[0]);
-    } else {
-        console.error("No se encontraron resultados.");
-        // Fallback: Intentar Enter en el input por si acaso selecciona el único resultado
-        if (searchInput) {
-            const enterEvent = new KeyboardEvent('keydown', {
-                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
-            });
-            searchInput.dispatchEvent(enterEvent);
-        }
-    }
-
-    // 5. ESPERAR 3 SEGUNDOS (Pedido por usuario)
-    console.log("Esperando 3s tras selección...");
-    await esperar(3000);
-
-    // 6. PEGAR MENSAJE
-    const cajaChat = document.querySelector('div[contenteditable="true"][data-tab="10"]');
-    if (cajaChat) {
-        cajaChat.focus();
-        // Pegar mensaje
-        document.execCommand('insertText', false, mensaje);
-
-        // 7. ESPERAR 2-5 SEGUNDOS ALEATORIAMENTE
-        const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
-        console.log(`Esperando ${delay}ms antes de enviar...`);
-        await esperar(delay);
-
-        // 8. ENVIAR
-        const btnEnviar = document.querySelector('button[aria-label="Send"]') || 
-                          document.querySelector('span[data-icon="send"]');
-        if (btnEnviar) {
-             const clickable = btnEnviar.closest('button') || btnEnviar;
-             clickable.click();
-        } else {
-            const enterSend = new KeyboardEvent('keydown', {
-                bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
-            });
-            cajaChat.dispatchEvent(enterSend);
-        }
-        console.log("✅ Mensaje enviado.");
-
-    } else {
-        console.error("No se encontró la caja de chat.");
-    }
+    window.location.href = url;
 }
 
 function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -182,5 +117,88 @@ function simularClick(elemento) {
             view: window
         });
         elemento.dispatchEvent(evento);
+    });
+}
+
+// --- FUNCIONES DE AUTOMATIZACION (NUEVA LÓGICA) ---
+
+async function checkPendingJob() {
+    // Usamos await en chrome.storage.local.get?
+    // En MV3 puede retornar promesa, pero para ser seguros con el código existente,
+    // usaremos un wrapper o callback. Aquí asumimos soporte de Promesa que es estándar en MV3 moderno.
+    try {
+        const data = await chrome.storage.local.get(['pending_job']);
+        const job = data.pending_job;
+        if (job) {
+            console.log("Found pending job:", job);
+            await procesarEnvio(job.mensaje);
+            // Limpiar trabajo una vez procesado (o si falló para no buclear eternamente)
+            await chrome.storage.local.remove('pending_job');
+        }
+    } catch (e) {
+        console.error("Error checking pending job:", e);
+    }
+}
+
+async function procesarEnvio(mensaje) {
+    console.log("Waiting for chat input...");
+    // 60s timeout para dar tiempo a cargar WhatsApp
+    const cajaChat = await waitForElement('div[contenteditable="true"][data-tab="10"]', 60000);
+
+    if (!cajaChat) {
+        console.error("Timeout waiting for chat input.");
+        return;
+    }
+
+    // Asegurar foco
+    cajaChat.focus();
+
+    // Pegar mensaje (comando nativo funciona mejor que manipular value en React)
+    document.execCommand('insertText', false, mensaje);
+
+    // Esperar 2-5s (Pedido por usuario)
+    const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+    console.log(`Waiting ${delay}ms with message pasted...`);
+    await esperar(delay);
+
+    // Enviar
+    const btnEnviar = document.querySelector('button[aria-label="Send"]') ||
+                      document.querySelector('span[data-icon="send"]');
+    if (btnEnviar) {
+         const clickable = btnEnviar.closest('button') || btnEnviar;
+         clickable.click();
+    } else {
+        const enterSend = new KeyboardEvent('keydown', {
+            bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
+        });
+        cajaChat.dispatchEvent(enterSend);
+    }
+    console.log("✅ Mensaje enviado (Lógica nueva).");
+}
+
+function waitForElement(selector, timeout) {
+    return new Promise(resolve => {
+        if (document.querySelector(selector)) {
+            return resolve(document.querySelector(selector));
+        }
+
+        const observer = new MutationObserver(mutations => {
+            if (document.querySelector(selector)) {
+                observer.disconnect();
+                resolve(document.querySelector(selector));
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        if (timeout) {
+            setTimeout(() => {
+                observer.disconnect();
+                resolve(null);
+            }, timeout);
+        }
     });
 }
