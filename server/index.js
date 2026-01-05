@@ -75,27 +75,7 @@ app.get("/", (req, res) => {
 const TIEMPO_MIN = 15000; // 15 segundos siempre
 const TIEMPO_MAX = 15000; // 15 segundos siempre
 
-const FRASES_INICIO = [
-  "Hola, estás?",
-  "Consulta rápida.",
-  "Buenas.",
-  "Che, te puedo llamar?",
-  "Hola, agendame.",
-  "Disculpa la hora.",
-  "Estás operativo?",
-  "Buen día.",
-];
-
-const FRASES_RESPUESTA = [
-  "Sí, dime.",
-  "Ahora no puedo.",
-  "Dale, te aviso.",
-  "Sisi, todo bien.",
-  "Estoy manejando.",
-  "Hablamos luego.",
-  "Ok.",
-  "Dale genial.",
-];
+const { FRASES_INICIO, FRASES_RESPUESTA } = require("./messages");
 
 let salas = {};
 const loopsActivos = {};
