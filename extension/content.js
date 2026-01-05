@@ -1,91 +1,93 @@
-// --- CONFIGURACIÓN ---
-// Ya no conectamos el socket aquí para evitar errores de Mixed Content.
-// La conexión la maneja el Background Script.
+// content.js
+// Este script corre dentro de la página de WhatsApp Web.
 
-// Iniciar Keep-Alive y listeners
-setTimeout(() => iniciar(), 3000);
+// Arrancamos todo después de unos segundos para dar tiempo a que cargue el DOM
+setTimeout(() => arrancarBot(), 3000);
 
-// Listener para detectar configuración sin recargar página
-chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && (changes.fid_sala || changes.fid_num)) {
-        iniciar();
+// Si cambia la config en el storage (desde el popup), reiniciamos
+chrome.storage.onChanged.addListener((cambios, area) => {
+    if (area === 'local' && (cambios.fid_sala || cambios.fid_num)) {
+        arrancarBot();
     }
 });
 
-let keepAlivePort = null;
-let monitorInterval = null;
-let isFidelizadorRunning = false;
+let puertoKeepAlive = null;
+let intervaloMonitor = null;
+let yaEstaCorriendo = false;
 
-function iniciar() {
-    if (isFidelizadorRunning) return;
+function arrancarBot() {
+    if (yaEstaCorriendo) return;
 
-    chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
-        if (!data.fid_num || !data.fid_sala) {
-            console.log("Fidelizador: Falta configurar número y sala en el icono.");
+    chrome.storage.local.get(['fid_num', 'fid_sala'], (datos) => {
+        if (!datos.fid_num || !datos.fid_sala) {
+            console.log("Fidelizador: Faltan datos (número o sala). Esperando configuración.");
             return;
         }
 
-        isFidelizadorRunning = true;
-        console.log("✅ Fidelizador iniciado en Content Script. Conectando a Background...");
-        conectarKeepAlive();
-        iniciarMonitorSesion();
+        yaEstaCorriendo = true;
+        console.log("Fidelizador activo. Iniciando conexión con Background...");
+        mantenerVivaLaConexion();
+        monitorearSesion();
 
-        // Verificar si hay trabajo pendiente tras recarga (NUEVA LÓGICA)
-        checkPendingJob();
+        // Revisar si quedó algo colgado de antes (por si se refrescó la página)
+        chequearTrabajoPendiente();
 
-        // Escuchar mensajes (solo una vez para evitar duplicados si 'iniciar' se llama varias veces)
-        if (!window.hasFidelizadorListener) {
-            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-                if (message.type === 'ORDEN' && message.payload) {
-                    console.log(`🤖 ORDEN RECIBIDA (desde Background): Escribir a ${message.payload.destino}`);
-                    abrirChatNuevo(message.payload.destino, message.payload.mensaje);
+        // Escuchar órdenes del background (solo agrego el listener una vez)
+        if (!window.tieneListenerFidelizador) {
+            chrome.runtime.onMessage.addListener((mensaje, sender, responder) => {
+                if (mensaje.type === 'ORDEN' && mensaje.payload) {
+                    console.log(`Orden recibida: Escribir a ${mensaje.payload.destino}`);
+                    abrirChatYEnviar(mensaje.payload.destino, mensaje.payload.mensaje);
                 }
             });
-            window.hasFidelizadorListener = true;
+            window.tieneListenerFidelizador = true;
         }
     });
 }
 
-function iniciarMonitorSesion() {
-    if (monitorInterval) clearInterval(monitorInterval);
-    monitorInterval = setInterval(() => {
-        // Verificar si estamos logueados buscando elementos clave de la UI
-        const isLogged = document.getElementById('pane-side') || document.querySelector('#side');
+// Revisa periódicamente si seguimos logueados en WhatsApp
+function monitorearSesion() {
+    if (intervaloMonitor) clearInterval(intervaloMonitor);
+    intervaloMonitor = setInterval(() => {
+        // Buscamos paneles típicos de la interfaz logueada
+        const estaLogueado = document.getElementById('pane-side') || document.querySelector('#side');
 
-        // También podemos chequear si existe el canvas del QR (lo cual indica NO logueado)
-        const qrCanvas = document.querySelector('canvas[aria-label="Scan me!"]');
+        // Si aparece el canvas del código QR, es que nos fuimos
+        const canvasQR = document.querySelector('canvas[aria-label="Scan me!"]');
 
-        if (!isLogged && qrCanvas) {
-             console.log("⚠️ DETECTADO LOGOUT O PANTALLA DE QR.");
+        if (!estaLogueado && canvasQR) {
+             console.log("Parece que se cerró la sesión o estamos en el QR.");
              chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
-             clearInterval(monitorInterval); // Dejar de monitorear
+             clearInterval(intervaloMonitor);
         }
     }, 5000);
 }
 
-function conectarKeepAlive() {
-    if (keepAlivePort) {
-        try { keepAlivePort.disconnect(); } catch(e) {}
+// Conexión persistente para que el Service Worker no se duerma
+function mantenerVivaLaConexion() {
+    if (puertoKeepAlive) {
+        try { puertoKeepAlive.disconnect(); } catch(e) {}
     }
 
     try {
-        keepAlivePort = chrome.runtime.connect({ name: "keep-alive" });
-        keepAlivePort.onDisconnect.addListener(() => {
-            console.log("⚠️ Desconectado del Background. Reintentando en 10s...");
-            keepAlivePort = null;
-            setTimeout(conectarKeepAlive, 10000);
+        puertoKeepAlive = chrome.runtime.connect({ name: "keep-alive" });
+        puertoKeepAlive.onDisconnect.addListener(() => {
+            console.log("Se cortó la conexión con Background. Reintentando en 10s...");
+            puertoKeepAlive = null;
+            setTimeout(mantenerVivaLaConexion, 10000);
         });
-    } catch (e) {
-        console.error("Error conectando a background:", e);
-        setTimeout(conectarKeepAlive, 10000);
+    } catch (error) {
+        console.error("Error al conectar keep-alive:", error);
+        setTimeout(mantenerVivaLaConexion, 10000);
     }
 }
 
-// --- FUNCIÓN DE CONTROL DE WHATSAPP ---
-async function abrirChatNuevo(telefono, mensaje) {
-    console.log(`🤖 Iniciando chat con ${telefono} (Método Link Injection)...`);
+// --- LÓGICA DE AUTOMATIZACIÓN ---
 
-    // Guardar trabajo pendiente (Backup por si hay recarga)
+async function abrirChatYEnviar(telefono, mensaje) {
+    console.log(`Iniciando proceso para: ${telefono}`);
+
+    // Guardo esto por seguridad, por si la página recarga en el medio
     await chrome.storage.local.set({
         pending_job: {
             telefono,
@@ -94,30 +96,28 @@ async function abrirChatNuevo(telefono, mensaje) {
         }
     });
 
-    // Limpiar número (solo dígitos)
-    const cleanPhone = telefono.replace(/\D/g, '');
+    const telefonoLimpio = telefono.replace(/\D/g, '');
 
-    // Intentar navegación interna sin recarga mediante click en link
-    // Esto aprovecha el router interno de WhatsApp si es posible
+    // Truco: inyectamos un link y le hacemos click para usar el router interno de React de WhatsApp
+    // Así evitamos recargar toda la página.
     const link = document.createElement('a');
-    link.href = `https://web.whatsapp.com/send?phone=${cleanPhone}`;
+    link.href = `https://web.whatsapp.com/send?phone=${telefonoLimpio}`;
     link.style.display = 'none';
     document.body.appendChild(link);
 
-    console.log(`Clicking internal link to: ${cleanPhone}`);
+    console.log(`Click en link interno hacia: ${telefonoLimpio}`);
     link.click();
 
-    // Limpieza
+    // Borro el link después de un ratito
     setTimeout(() => {
         if (link.parentNode) link.parentNode.removeChild(link);
     }, 1000);
 
-    // Intentamos procesar inmediatamente (si no hubo recarga)
-    // Si hubo recarga, checkPendingJob lo retomará.
-    procesarEnvio(mensaje);
+    // Si no recarga la página, seguimos derecho. Si recarga, 'chequearTrabajoPendiente' se encarga.
+    procesarElEnvioDelMensaje(mensaje);
 }
 
-function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
+function esperarUnToque(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Se mantiene simularClick por ser útil
 function simularClick(elemento) {
@@ -132,88 +132,86 @@ function simularClick(elemento) {
     });
 }
 
-// --- FUNCIONES DE AUTOMATIZACION (NUEVA LÓGICA) ---
-
-async function checkPendingJob() {
-    // Usamos await en chrome.storage.local.get?
-    // En MV3 puede retornar promesa, pero para ser seguros con el código existente,
-    // usaremos un wrapper o callback. Aquí asumimos soporte de Promesa que es estándar en MV3 moderno.
+// Función vieja confiable para revisar si hay jobs colgados
+async function chequearTrabajoPendiente() {
     try {
         const data = await chrome.storage.local.get(['pending_job']);
-        const job = data.pending_job;
-        if (job) {
-            console.log("Found pending job:", job);
-            await procesarEnvio(job.mensaje);
-            // Limpiar trabajo una vez procesado (o si falló para no buclear eternamente)
+        const trabajo = data.pending_job;
+        if (trabajo) {
+            console.log("Encontré un trabajo pendiente:", trabajo);
+            await procesarElEnvioDelMensaje(trabajo.mensaje);
+            // Ya está, lo borramos
             await chrome.storage.local.remove('pending_job');
         }
     } catch (e) {
-        console.error("Error checking pending job:", e);
+        console.error("Error chequeando pendientes:", e);
     }
 }
 
-async function procesarEnvio(mensaje) {
-    console.log("Waiting for chat input...");
-    // 60s timeout para dar tiempo a cargar WhatsApp
-    const cajaChat = await waitForElement('div[contenteditable="true"][data-tab="10"]', 60000);
+async function procesarElEnvioDelMensaje(mensaje) {
+    console.log("Esperando que aparezca la caja de chat...");
+    // Le damos hasta 60 segundos por si internet está lento
+    const cajaChat = await esperarElemento('div[contenteditable="true"][data-tab="10"]', 60000);
 
     if (!cajaChat) {
-        console.error("Timeout waiting for chat input.");
+        console.error("No apareció la caja de chat. Abortando.");
         return;
     }
 
-    // Asegurar foco
     cajaChat.focus();
 
-    // Pegar mensaje (comando nativo funciona mejor que manipular value en React)
+    // Usamos execCommand porque React a veces ignora cambios directos al value
     document.execCommand('insertText', false, mensaje);
 
-    // Esperar 2s
-    console.log(`Waiting 2000ms with message pasted...`);
-    await esperar(2000);
+    console.log(`Mensaje pegado. Esperando 2 segs para enviar...`);
+    await esperarUnToque(2000);
 
-    // Enviar
+    // Buscamos el botón de enviar
     const btnEnviar = document.querySelector('button[aria-label="Send"]') ||
                       document.querySelector('span[data-icon="send"]');
+
     if (btnEnviar) {
-         const clickable = btnEnviar.closest('button') || btnEnviar;
-         clickable.click();
+         // A veces el click está en un padre o hijo, aseguramos
+         const elementoClickeable = btnEnviar.closest('button') || btnEnviar;
+         elementoClickeable.click();
     } else {
-        const enterSend = new KeyboardEvent('keydown', {
+        // Si no está el botón (raro), probamos con Enter
+        const enterEvent = new KeyboardEvent('keydown', {
             bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
         });
-        cajaChat.dispatchEvent(enterSend);
+        cajaChat.dispatchEvent(enterEvent);
     }
-    console.log("✅ Mensaje enviado (Lógica nueva).");
+    console.log("Mensaje enviado.");
 
-    // Esperar 2s después de enviar
-    await esperar(2000);
+    // Esperamos un poquito antes de dar por terminado
+    await esperarUnToque(2000);
 
-    // Limpiar trabajo una vez procesado con éxito
+    // Limpiamos el pendiente
     chrome.storage.local.remove('pending_job');
 }
 
-function waitForElement(selector, timeout) {
+// Utilidad para esperar que aparezca algo en el DOM
+function esperarElemento(selector, timeout) {
     return new Promise(resolve => {
         if (document.querySelector(selector)) {
             return resolve(document.querySelector(selector));
         }
 
-        const observer = new MutationObserver(mutations => {
+        const observador = new MutationObserver(mutaciones => {
             if (document.querySelector(selector)) {
-                observer.disconnect();
+                observador.disconnect();
                 resolve(document.querySelector(selector));
             }
         });
 
-        observer.observe(document.body, {
+        observador.observe(document.body, {
             childList: true,
             subtree: true
         });
 
         if (timeout) {
             setTimeout(() => {
-                observer.disconnect();
+                observador.disconnect();
                 resolve(null);
             }, timeout);
         }

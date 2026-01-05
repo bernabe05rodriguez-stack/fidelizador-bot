@@ -1,181 +1,186 @@
-// background.js - Service Worker
+// background.js
+// Este es el service worker. Se encarga de mantener la conexión con el server y hablar con la pestaña de WhatsApp.
 
-// --- GLOBAL ERROR HANDLING ---
-self.addEventListener('error', (event) => {
-  console.error("[Background] Uncaught Error:", event.error || event.message);
+// Manejo de errores que no agarramos en otro lado
+self.addEventListener('error', (evento) => {
+  console.error("Ups, error en Background:", evento.error || evento.message);
 });
 
-self.addEventListener('unhandledrejection', (event) => {
-  console.error("[Background] Unhandled Rejection:", event.reason);
+self.addEventListener('unhandledrejection', (evento) => {
+  console.error("Promesa rechazada no manejada:", evento.reason);
 });
 
-// --- IMPORT SOCKET.IO ---
+// Importamos la librería de Socket.IO. Si falla esto, no anda nada.
 try {
   importScripts('socket.io.js');
-} catch (e) {
-  console.error("[Background] CRITICAL: Failed to import socket.io.js", e);
+} catch (error) {
+  console.error("CRITICO: No pude cargar socket.io.js", error);
 }
 
 const URL_SERVIDOR = "http://fidelizador.online";
 let socket = null;
-let currentSala = null;
-let currentNumero = null;
+let salaActual = null;
+let miNumeroActual = null;
 
-// --- GESTIÓN DE CONEXIÓN SOCKET.IO ---
-function conectarSocket(sala, numero) {
+// Función principal para conectarnos al socket
+function conectarAlSocket(sala, numero) {
+  // Chequeo básico por si no cargó la librería
   if (typeof io === 'undefined') {
-    console.error("[Background] CRITICAL: 'io' is not defined. Cannot connect.");
+    console.error("No existe 'io'. Algo salió mal con la importación.");
     return;
   }
 
+  // Si ya estoy conectado con los mismos datos, no hago nada
   if (socket && socket.connected) {
-    if (currentSala === sala && currentNumero === numero) return;
+    if (salaActual === sala && miNumeroActual === numero) return;
+    // Si cambiaron los datos, desconecto para reconectar
     socket.disconnect();
   }
 
-  currentSala = sala;
-  currentNumero = numero;
+  salaActual = sala;
+  miNumeroActual = numero;
 
-  console.log(`[Background] Conectando a ${URL_SERVIDOR} como ${numero} en sala ${sala}`);
+  console.log(`Intentando conectar a ${URL_SERVIDOR} | Usuario: ${numero} | Sala: ${sala}`);
 
   try {
-    // Configurar nueva conexión FORZANDO WEBSOCKET
+    // IMPORTANTE: Forzamos websocket porque en Service Worker el polling suele fallar
     socket = io(URL_SERVIDOR, {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
-      transports: ['websocket'], // IMPORTANT: Force WebSocket to avoid XHR/Polling issues in SW
+      transports: ['websocket'], // Esto es clave para que no se caiga
       forceNew: true
     });
 
     socket.on('connect', () => {
-      console.log("[Background] Socket conectado ID:", socket.id);
+      console.log("Socket conectado ok. ID:", socket.id);
+      // Le aviso al server que me uno
       socket.emit('unirse', { sala: sala, miNumero: numero });
     });
 
     socket.on('connect_error', (err) => {
-      console.error("[Background] Connection Error:", err.message);
+      console.error("Error de conexión:", err.message);
     });
 
+    // Cuando el server me manda una orden (escribirle a alguien)
     socket.on('orden_servidor', (msg) => {
-      console.log("[Background] Orden recibida:", msg);
-      enviarAWhatsApp(msg);
+      console.log("Me llegó una orden del server:", msg);
+      enviarOrdenAContentScript(msg);
     });
 
-    socket.on('disconnect', (reason) => {
-      console.log("[Background] Desconectado:", reason);
+    socket.on('disconnect', (razon) => {
+      console.log("Se desconectó el socket:", razon);
     });
 
-  } catch (e) {
-    console.error("[Background] Exception while creating socket:", e);
+  } catch (excepcion) {
+    console.error("Excepción al crear el socket:", excepcion);
   }
 }
 
-function desconectarSocket() {
+function desconectarDelSocket() {
   if (socket) {
     socket.disconnect();
     socket = null;
   }
-  currentSala = null;
-  currentNumero = null;
+  salaActual = null;
+  miNumeroActual = null;
 }
 
-// --- COMUNICACIÓN CON CONTENT SCRIPT ---
-function enviarAWhatsApp(msg) {
-  chrome.tabs.query({ url: "https://web.whatsapp.com/*" }, (tabs) => {
-    if (tabs && tabs.length > 0) {
-      tabs.forEach(tab => {
-        chrome.tabs.sendMessage(tab.id, { type: 'ORDEN', payload: msg })
-          .catch(err => console.log("Error enviando a tab (tab cerrada?):", err));
+// Le pasamos el mensaje a la pestaña activa de WhatsApp
+function enviarOrdenAContentScript(mensaje) {
+  chrome.tabs.query({ url: "https://web.whatsapp.com/*" }, (pestañas) => {
+    if (pestañas && pestañas.length > 0) {
+      pestañas.forEach(pestana => {
+        chrome.tabs.sendMessage(pestana.id, { type: 'ORDEN', payload: mensaje })
+          .catch(err => console.log("No se pudo enviar a la pestaña (¿cerrada?):", err));
       });
     } else {
-      console.log("⚠️ No hay pestañas de WhatsApp abiertas.");
+      console.log("Ojo: No encontré ninguna pestaña de WhatsApp abierta.");
     }
   });
 }
 
-// --- MONITOR DE STORAGE ---
-chrome.storage.onChanged.addListener((changes, area) => {
+// Escuchamos cambios en la configuración (Storage)
+chrome.storage.onChanged.addListener((cambios, area) => {
   if (area === 'local') {
 
-    // 1. CAMBIO DE SALA/NUMERO (Conexión/Desconexión)
-    if (changes.fid_sala || changes.fid_num) {
-      chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
-        if (data.fid_sala && data.fid_num) {
-          conectarSocket(data.fid_sala, data.fid_num);
+    // 1. Si cambia la sala o el número, hay que reconectar o desconectar
+    if (cambios.fid_sala || cambios.fid_num) {
+      chrome.storage.local.get(['fid_sala', 'fid_num'], (datos) => {
+        if (datos.fid_sala && datos.fid_num) {
+          conectarAlSocket(datos.fid_sala, datos.fid_num);
         } else {
-          // Si tenía socket y ahora no hay datos, es un logout explicito
+          // Si faltan datos es porque el usuario salió (Logout)
           if (socket && socket.connected) {
-             socket.emit('abandonar'); // Avisar al server antes de cortar
-             setTimeout(desconectarSocket, 200);
+             socket.emit('abandonar'); // Aviso prolijo al server
+             setTimeout(desconectarDelSocket, 200);
           } else {
-             desconectarSocket();
+             desconectarDelSocket();
           }
         }
       });
     }
 
-    // 2. CAMBIO DE PAUSA
-    if (changes.fid_paused) {
-      const nuevoEstado = changes.fid_paused.newValue;
+    // 2. Si el usuario pausa o despausa
+    if (cambios.fid_paused) {
+      const estadoPausa = cambios.fid_paused.newValue;
       if (socket && socket.connected) {
-        console.log(`[Background] Enviando pausa: ${nuevoEstado}`);
-        socket.emit('pausar', nuevoEstado);
+        console.log(`Cambiando estado de pausa a: ${estadoPausa}`);
+        socket.emit('pausar', estadoPausa);
       }
     }
   }
 });
 
-// --- MENSAJES DESDE CONTENT SCRIPT (Logout detectado) ---
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'LOGOUT_DETECTED') {
-    console.log("[Background] LOGOUT DETECTED -> Limpiando sesión");
+// Mensajes que vienen desde el script de contenido (content.js)
+chrome.runtime.onMessage.addListener((mensaje, sender, responder) => {
+  // Si detectamos que se deslogueó de WhatsApp Web
+  if (mensaje.type === 'LOGOUT_DETECTED') {
+    console.log("Se detectó logout en la web -> Limpiando todo.");
 
-    // Avisar al server (si es posible)
     if (socket && socket.connected) socket.emit('abandonar');
 
-    // Limpiar storage para evitar reconexión
+    // Borro los datos para que no se vuelva a conectar solo
     chrome.storage.local.remove(['fid_sala', 'fid_paused'], () => {
-       desconectarSocket();
+       desconectarDelSocket();
     });
   }
 });
 
-// Inicializar al arrancar
+// Al arrancar el navegador
 chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
-    if (data.fid_sala && data.fid_num) {
-      conectarSocket(data.fid_sala, data.fid_num);
-    }
-  });
+  verificarYConectar();
 });
 
-// Al instalar/recargar extensión
+// Al instalar o recargar la extensión
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
-    if (data.fid_sala && data.fid_num) {
-      conectarSocket(data.fid_sala, data.fid_num);
+  verificarYConectar();
+});
+
+function verificarYConectar() {
+  chrome.storage.local.get(['fid_sala', 'fid_num'], (datos) => {
+    if (datos.fid_sala && datos.fid_num) {
+      conectarAlSocket(datos.fid_sala, datos.fid_num);
     }
   });
-});
+}
 
 // --- KEEP ALIVE ---
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === "keep-alive") {
-    // console.log("[Background] Keep-Alive ping received");
-
-    // Check connection on keep-alive
-    chrome.storage.local.get(['fid_sala', 'fid_num'], (data) => {
-        if (data.fid_sala && data.fid_num) {
+// Truco para mantener vivo el Service Worker
+chrome.runtime.onConnect.addListener((puerto) => {
+  if (puerto.name === "keep-alive") {
+    // Chequeamos conexión cada vez que el content script nos habla
+    chrome.storage.local.get(['fid_sala', 'fid_num'], (datos) => {
+        if (datos.fid_sala && datos.fid_num) {
           if (!socket || !socket.connected) {
-             conectarSocket(data.fid_sala, data.fid_num);
+             conectarAlSocket(datos.fid_sala, datos.fid_num);
           }
         }
     });
 
-    port.onDisconnect.addListener(() => {
-      // console.log("[Background] Keep-Alive port closed");
+    puerto.onDisconnect.addListener(() => {
+      // Se desconectó el puerto (posiblemente se cerró la pestaña)
     });
   }
 });
