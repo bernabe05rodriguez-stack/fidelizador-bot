@@ -1,165 +1,177 @@
-// CONFIGURACIÓN
+// popup.js
+// Lógica de la ventanita de la extensión
+
 const URL_SERVIDOR = "http://fidelizador.online";
 
+// Referencias a elementos del DOM
 const btnUnirte = document.getElementById('btnUnirte');
 const listaSalas = document.getElementById('listaSalas');
-const roomsContainer = document.getElementById('roomsContainer');
-const statusMsg = document.getElementById('status');
+const contenedorSalas = document.getElementById('roomsContainer');
+const mensajeEstado = document.getElementById('status');
 const inputNumero = document.getElementById('miNumero');
 
 // Secciones
-const joinSection = document.getElementById('joinSection');
-const controlsSection = document.getElementById('controlsSection');
+const seccionUnirse = document.getElementById('joinSection');
+const seccionControles = document.getElementById('controlsSection');
 
-// Elementos de info
-const savedSalaEl = document.getElementById('savedSala');
-const savedNumEl = document.getElementById('savedNum');
-const statusLabel = document.getElementById('statusLabel');
+// Infos
+const labelSala = document.getElementById('savedSala');
+const labelNum = document.getElementById('savedNum');
+const labelEstado = document.getElementById('statusLabel');
 
-// Botones de control
+// Botones
 const btnPausar = document.getElementById('btnPausar');
 const btnSalir = document.getElementById('btnSalir');
 
-// Cargar datos guardados
-chrome.storage.local.get(['fid_num', 'fid_sala', 'fid_paused'], (data) => {
-  if (data.fid_num) {
-    inputNumero.value = data.fid_num;
+// Al abrir, chequeamos si ya hay datos guardados
+chrome.storage.local.get(['fid_num', 'fid_sala', 'fid_paused'], (datos) => {
+  if (datos.fid_num) {
+    inputNumero.value = datos.fid_num;
   }
 
-  if (data.fid_sala && data.fid_num) {
-    // ESTAMOS EN SALA
-    mostrarControles(data);
+  if (datos.fid_sala && datos.fid_num) {
+    // Ya estamos adentro
+    mostrarPantallaControles(datos);
   } else {
-    // NO ESTAMOS EN SALA
-    joinSection.style.display = 'block';
+    // Hay que unirse
+    seccionUnirse.style.display = 'block';
   }
 });
 
-function mostrarControles(data) {
-  joinSection.style.display = 'none';
-  controlsSection.style.display = 'block';
+function mostrarPantallaControles(datos) {
+  seccionUnirse.style.display = 'none';
+  seccionControles.style.display = 'block';
 
-  savedSalaEl.innerText = data.fid_sala;
-  savedNumEl.innerText = data.fid_num;
+  labelSala.innerText = datos.fid_sala;
+  labelNum.innerText = datos.fid_num;
 
-  actualizarUIEstado(data.fid_paused);
+  actualizarVisualEstado(datos.fid_paused);
 }
 
-function actualizarUIEstado(isPaused) {
-  if (isPaused) {
-    statusLabel.innerText = "PAUSADO";
-    statusLabel.style.color = "#f59e0b";
+function actualizarVisualEstado(estaPausado) {
+  if (estaPausado) {
+    labelEstado.innerText = "PAUSADO";
+    labelEstado.style.color = "#f59e0b"; // Naranja
     btnPausar.innerText = "REANUDAR";
   } else {
-    statusLabel.innerText = "ACTIVO";
-    statusLabel.style.color = "green";
+    labelEstado.innerText = "ACTIVO";
+    labelEstado.style.color = "green";
     btnPausar.innerText = "PAUSAR";
   }
 }
 
-// LOGICA BOTONES CONTROL
+// -- Eventos de los botones --
+
 btnPausar.addEventListener('click', () => {
-  chrome.storage.local.get(['fid_paused'], (data) => {
-    const newState = !data.fid_paused;
-    chrome.storage.local.set({ fid_paused: newState }, () => {
-      actualizarUIEstado(newState);
+  chrome.storage.local.get(['fid_paused'], (datos) => {
+    const nuevoEstado = !datos.fid_paused;
+    // Guardamos y actualizamos la UI
+    chrome.storage.local.set({ fid_paused: nuevoEstado }, () => {
+      actualizarVisualEstado(nuevoEstado);
     });
   });
 });
 
 btnSalir.addEventListener('click', () => {
-  if (confirm("¿Seguro que quieres salir de la sala?")) {
+  if (confirm("¿Seguro que querés salir de la sala?")) {
     chrome.storage.local.remove(['fid_sala', 'fid_paused'], () => {
-      // Nota: No borramos el número para que sea fácil volver a entrar
-      location.reload(); // Recargar popup para volver a inicio
+      // El número no lo borro así es más fácil entrar la próxima
+      location.reload();
     });
   }
 });
 
-let socket = null;
+let socketPopup = null;
 
-function conectarYListar() {
-  if (socket && socket.connected) {
-    socket.emit('get_rooms');
+function conectarYBuscarSalas() {
+  if (socketPopup && socketPopup.connected) {
+    socketPopup.emit('get_rooms'); // Pido salas de nuevo
     return;
   }
 
-  statusMsg.innerText = "Conectando al servidor...";
+  mensajeEstado.innerText = "Conectando...";
   
-  socket = io(URL_SERVIDOR);
+  socketPopup = io(URL_SERVIDOR);
 
-  socket.on('connect', () => {
-    statusMsg.innerText = "Conectado. Buscando salas...";
-    socket.emit('get_rooms');
+  socketPopup.on('connect', () => {
+    mensajeEstado.innerText = "Conectado. Trayendo salas...";
+    socketPopup.emit('get_rooms');
   });
 
-  socket.on('rooms_list', (rooms) => {
-    mostrarSalas(rooms);
-    statusMsg.innerText = "";
+  socketPopup.on('rooms_list', (salas) => {
+    renderizarSalas(salas);
+    mensajeEstado.innerText = "";
   });
   
-  socket.on('rooms_update', (rooms) => {
-    mostrarSalas(rooms);
+  // Actualización en tiempo real
+  socketPopup.on('rooms_update', (salas) => {
+    renderizarSalas(salas);
   });
 
-  socket.on('connect_error', () => {
-    statusMsg.innerText = "Error al conectar con fidelizador.online";
+  socketPopup.on('connect_error', () => {
+    mensajeEstado.innerText = "Error: No se pudo conectar a fidelizador.online";
   });
 }
 
-function mostrarSalas(rooms) {
+function renderizarSalas(salas) {
   listaSalas.style.display = 'block';
-  roomsContainer.innerHTML = '';
+  contenedorSalas.innerHTML = '';
 
-  if (!rooms || rooms.length === 0) {
-    roomsContainer.innerHTML = '<span style="font-size:0.8rem; color:#888">No hay salas disponibles.</span>';
+  if (!salas || salas.length === 0) {
+    contenedorSalas.innerHTML = '<span style="font-size:0.8rem; color:#888">No encontré salas activas.</span>';
     return;
   }
 
-  rooms.forEach(room => {
+  salas.forEach(sala => {
     const div = document.createElement('div');
     div.className = 'room-item';
 
-    const spanName = document.createElement('span');
-    spanName.className = 'room-name';
-    spanName.innerText = room.name;
+    const nombreSala = document.createElement('span');
+    nombreSala.className = 'room-name';
+    nombreSala.innerText = sala.name;
 
-    const spanCount = document.createElement('span');
-    spanCount.className = 'room-count';
-    spanCount.innerText = `${room.count} usu`;
+    const contador = document.createElement('span');
+    contador.className = 'room-count';
+    contador.innerText = `${sala.count} usu`;
 
-    div.appendChild(spanName);
-    div.appendChild(spanCount);
+    div.appendChild(nombreSala);
+    div.appendChild(contador);
 
     div.addEventListener('click', () => {
-      guardarYSalir(room.name);
+      guardarConfiguracion(sala.name);
     });
 
-    roomsContainer.appendChild(div);
+    contenedorSalas.appendChild(div);
   });
 }
 
-function guardarYSalir(salaNombre) {
-  const rawNumero = inputNumero.value;
-  if (!rawNumero) return alert("Por favor ingresa tu número.");
+function guardarConfiguracion(nombreSala) {
+  const numeroBruto = inputNumero.value;
+  if (!numeroBruto) return alert("Che, poné tu número.");
 
-  // Limpiar número (solo dígitos)
-  const cleanNumero = rawNumero.replace(/\D/g, '');
+  // Dejamos solo números
+  const numeroLimpio = numeroBruto.replace(/\D/g, '');
 
-  if (cleanNumero.length < 5) return alert("El número parece inválido.");
+  if (numeroLimpio.length < 5) return alert("Ese número parece muy corto, revisalo.");
 
-  chrome.storage.local.set({ 'fid_num': cleanNumero, 'fid_sala': salaNombre, 'fid_paused': false }, () => {
-    alert(`Te has unido a la sala "${salaNombre}".\n\nEl sistema debería iniciarse automáticamente en WhatsApp Web.`);
-    window.close(); // Cerrar popup
+  chrome.storage.local.set({
+      'fid_num': numeroLimpio,
+      'fid_sala': nombreSala,
+      'fid_paused': false
+  }, () => {
+    alert(`Listo! Te uniste a "${nombreSala}".\n\nEl sistema va a arrancar solo en WhatsApp Web.`);
+    window.close(); // Cerramos el popup
   });
 }
 
 btnUnirte.addEventListener('click', () => {
-  if (!inputNumero.value) return alert("Ingresa tu número primero.");
-  // Guardamos el número aunque no elija sala aún, por comodidad
-  const cleanNumero = inputNumero.value.replace(/\D/g, '');
-  if(cleanNumero.length > 5) {
-      chrome.storage.local.set({ 'fid_num': cleanNumero });
+  if (!inputNumero.value) return alert("Primero ingresá tu número.");
+
+  // Guardo el número provisorio
+  const numeroLimpio = inputNumero.value.replace(/\D/g, '');
+  if(numeroLimpio.length > 5) {
+      chrome.storage.local.set({ 'fid_num': numeroLimpio });
   }
-  conectarYListar();
+
+  conectarYBuscarSalas();
 });
