@@ -1,25 +1,37 @@
 // --- CONFIGURACIÓN ---
-const URL_SERVIDOR = "http://fidelizador.online";
+// Ya no conectamos el socket aquí para evitar errores de Mixed Content.
+// La conexión la maneja el Background Script.
+
+// Iniciar Keep-Alive y listeners
 setTimeout(() => iniciar(), 3000);
 
 function iniciar() {
     chrome.storage.local.get(['fid_num', 'fid_sala'], (data) => {
-        // Si el usuario no configuró el popup, no hacemos nada
-        if (!data.fid_num || !data.fid_sala) return console.log("Fidelizador: Falta configurar número y sala en el icono.");
+        // Validación básica
+        if (!data.fid_num || !data.fid_sala) {
+            console.log("Fidelizador: Falta configurar número y sala en el icono.");
+            return;
+        }
 
-        // Conexión al servidor
-        const socket = io(URL_SERVIDOR); 
+        console.log("✅ Fidelizador iniciado en Content Script. Conectando a Background...");
 
-        socket.on("connect", () => {
-            console.log("✅ Conectado a Sala:", data.fid_sala);
-            // Nos unimos a la sala
-            socket.emit("unirse", { sala: data.fid_sala, miNumero: data.fid_num });
-        });
+        // 1. Conectar a Background para mantener vivo el Service Worker
+        try {
+            const port = chrome.runtime.connect({ name: "keep-alive" });
+            port.onDisconnect.addListener(() => {
+                console.log("⚠️ Desconectado del Background. Reintentando en 5s...");
+                setTimeout(iniciar, 5000);
+            });
+        } catch (e) {
+            console.error("Error conectando a background:", e);
+        }
 
-        // Escuchar órdenes del servidor
-        socket.on("orden_servidor", async (msg) => {
-            console.log(`🤖 ORDEN RECIBIDA: Escribir a ${msg.destino}`);
-            await abrirChatNuevo(msg.destino, msg.mensaje);
+        // 2. Escuchar mensajes del Background (órdenes del servidor)
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === 'ORDEN' && message.payload) {
+                console.log(`🤖 ORDEN RECIBIDA (desde Background): Escribir a ${message.payload.destino}`);
+                abrirChatNuevo(message.payload.destino, message.payload.mensaje);
+            }
         });
     });
 }

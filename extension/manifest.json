@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Bot Fidelizador",
-  "version": "1.0",
-  "permissions": ["storage"],
-  "host_permissions": ["https://web.whatsapp.com/*"],
+  "version": "1.1",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://web.whatsapp.com/*", "http://fidelizador.online/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": { "default_popup": "popup.html" },
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
-      "js": ["socket.io.js", "content.js"]
+      "js": ["content.js"]
     }
   ]
 }
