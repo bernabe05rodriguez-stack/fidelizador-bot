@@ -1,25 +1,80 @@
 // content.js
 // Este script corre dentro de la página de WhatsApp Web.
 
-// Arrancamos todo después de unos segundos para dar tiempo a que cargue el DOM
-setTimeout(() => arrancarBot(), 3000);
+// --- CONFIG DEFAULT POR SI NO HAY SERVER ---
+let clientConfig = {
+  selectors: {
+    chatBox: 'div[contenteditable="true"][data-tab="10"]',
+    btnSend: 'button[aria-label="Send"]',
+    btnSendAlt: 'span[data-icon="send"]',
+    sidePane: '#pane-side',
+    sidePaneAlt: '#side',
+    logoutCanvas: 'canvas'
+  },
+  timeouts: {
+    navWait: 1000,
+    chatLoad: 60000,
+    prePaste: 2000,
+    preSend: 2000,
+    postSend: 2000
+  }
+};
 
-// Si cambia la config en el storage (desde el popup), reiniciamos
-chrome.storage.onChanged.addListener((cambios, area) => {
-    if (area === 'local' && (cambios.fid_sala || cambios.fid_num)) {
-        arrancarBot();
+// Intentar cargar config desde storage al inicio
+chrome.storage.local.get(['client_config'], (data) => {
+    if (data.client_config) {
+        console.log("Configuración remota cargada.");
+        clientConfig = data.client_config;
     }
-    // Si cambia la cola, y no estamos procesando, tal vez deberíamos arrancar?
-    // Mejor lo manejamos internamente.
+    // Iniciamos la espera inteligente
+    iniciarEsperaDeCarga();
+});
+
+// Escuchar cambios de config en tiempo real
+chrome.storage.onChanged.addListener((cambios, area) => {
+    if (area === 'local' && cambios.client_config) {
+        console.log("Configuración actualizada en caliente.");
+        clientConfig = cambios.client_config.newValue;
+    }
 });
 
 let puertoKeepAlive = null;
 let intervaloMonitor = null;
 let yaEstaCorriendo = false;
+let intervaloEsperaCarga = null;
 
 // --- COLA DE TRABAJO ---
 let colaDeTrabajo = [];
 let procesandoCola = false;
+
+function iniciarEsperaDeCarga() {
+    if (intervaloEsperaCarga) clearInterval(intervaloEsperaCarga);
+
+    console.log("Esperando que WhatsApp Web termine de cargar...");
+
+    // Polling cada 500ms para ver si ya está el panel lateral
+    intervaloEsperaCarga = setInterval(() => {
+        const sidePane = document.querySelector(clientConfig.selectors.sidePane) ||
+                         document.querySelector(clientConfig.selectors.sidePaneAlt);
+
+        if (sidePane) {
+            console.log("WhatsApp Web cargado. Iniciando bot...");
+            clearInterval(intervaloEsperaCarga);
+            intervaloEsperaCarga = null;
+            arrancarBot();
+        }
+    }, 500);
+}
+
+// Si cambia la config en el storage (desde el popup), reiniciamos si es necesario
+chrome.storage.onChanged.addListener((cambios, area) => {
+    if (area === 'local' && (cambios.fid_sala || cambios.fid_num)) {
+        // Si cambian credenciales, re-verificamos estado
+        yaEstaCorriendo = false;
+        iniciarEsperaDeCarga();
+    }
+});
+
 
 function arrancarBot() {
     if (yaEstaCorriendo) return;
@@ -128,22 +183,18 @@ async function procesarCola() {
 function monitorearSesion() {
     if (intervaloMonitor) clearInterval(intervaloMonitor);
     intervaloMonitor = setInterval(() => {
-        // Buscamos paneles típicos de la interfaz logueada
-        const estaLogueado = document.getElementById('pane-side') || document.querySelector('#side');
+        // Buscamos paneles típicos de la interfaz logueada usando CONFIG
+        const estaLogueado = document.querySelector(clientConfig.selectors.sidePane) ||
+                             document.querySelector(clientConfig.selectors.sidePaneAlt);
 
-        // Si aparece CUALQUIER canvas en el body y NO estamos logueados, es el QR casi seguro.
-        // (El chat normal no suele tener un canvas suelto en el body o landing wrapper).
-        const hayCanvas = document.querySelector('canvas');
-
-        // También podemos chequear texto de landing si queremos ser más específicos
-        // pero con canvas suele bastar para la landing de WP Web.
+        const hayCanvas = document.querySelector(clientConfig.selectors.logoutCanvas);
 
         if (!estaLogueado && hayCanvas) {
              console.log("Parece que se cerró la sesión o estamos en el QR.");
              chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
              clearInterval(intervaloMonitor);
         }
-    }, 2000); // Chequeamos más seguido (2s)
+    }, 2000);
 }
 
 // Conexión persistente para que el Service Worker no se duerma
@@ -169,21 +220,20 @@ function mantenerVivaLaConexion() {
 
 async function abrirChatYEnviar(telefono, mensaje) {
     // 1. Verificar logueo ANTES de hacer nada.
-    // Si clickeamos el link estando deslogueados, WP Web recarga la página y entramos en loop infinito.
-    const estaLogueado = document.getElementById('pane-side') || document.querySelector('#side');
+    const estaLogueado = document.querySelector(clientConfig.selectors.sidePane) ||
+                         document.querySelector(clientConfig.selectors.sidePaneAlt);
+
     if (!estaLogueado) {
         console.warn("Detectado intento de envío sin sesión activa. Abortando para evitar recarga.");
-        // Forzamos chequeo de logout inmediato
-        const hayCanvas = document.querySelector('canvas');
+        const hayCanvas = document.querySelector(clientConfig.selectors.logoutCanvas);
         if (hayCanvas) {
             chrome.runtime.sendMessage({ type: 'LOGOUT_DETECTED' });
         }
-        return; // Salimos sin hacer nada
+        return;
     }
 
     console.log(`Iniciando proceso para: ${telefono}`);
 
-    // Guardo esto por seguridad, por si la página recarga en el medio
     await chrome.storage.local.set({
         pending_job: {
             telefono,
@@ -194,8 +244,7 @@ async function abrirChatYEnviar(telefono, mensaje) {
 
     const telefonoLimpio = telefono.replace(/\D/g, '');
 
-    // Truco: inyectamos un link y le hacemos click para usar el router interno de React de WhatsApp
-    // Así evitamos recargar toda la página.
+    // Truco: inyectamos un link y le hacemos click para usar el router interno
     const link = document.createElement('a');
     link.href = `https://web.whatsapp.com/send?phone=${telefonoLimpio}`;
     link.style.display = 'none';
@@ -204,22 +253,18 @@ async function abrirChatYEnviar(telefono, mensaje) {
     console.log(`Click en link interno hacia: ${telefonoLimpio}`);
     link.click();
 
-    // Borro el link después de un ratito
     setTimeout(() => {
         if (link.parentNode) link.parentNode.removeChild(link);
     }, 1000);
 
-    // Esperamos un poquito para que empiece la navegación antes de buscar el chat
-    // No es estrictamente necesario porque esperarElemento lo maneja, pero ayuda a la estabilidad.
-    await esperarUnToque(1000);
+    // Espera configurable
+    await esperarUnToque(clientConfig.timeouts.navWait);
 
-    // Si no recarga la página, seguimos derecho. Si recarga, 'chequearTrabajoPendiente' (ahora cargarColaYPendientes) se encarga.
     await procesarElEnvioDelMensaje(mensaje);
 }
 
 function esperarUnToque(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Se mantiene simularClick por ser útil
 function simularClick(elemento) {
     const eventos = ['mousedown', 'mouseup', 'click'];
     eventos.forEach(tipo => {
@@ -234,43 +279,34 @@ function simularClick(elemento) {
 
 async function procesarElEnvioDelMensaje(mensaje) {
     console.log("Esperando que aparezca la caja de chat...");
-    // Le damos hasta 60 segundos por si internet está lento
-    const cajaChat = await esperarElemento('div[contenteditable="true"][data-tab="10"]', 60000);
+    // Timeout configurable
+    const cajaChat = await esperarElemento(clientConfig.selectors.chatBox, clientConfig.timeouts.chatLoad);
 
     if (!cajaChat) {
         console.error("No apareció la caja de chat. Abortando.");
-        // Si falló, lo borramos de pending para no trabar.
-        // Idealmente podríamos reintentar poniéndolo en cola de nuevo, pero simple es mejor.
          chrome.storage.local.remove('pending_job');
         return;
     }
 
-    // 1. Abrir chat (ya hecho) -> Esperar 2s
-    console.log("Chat detectado. Esperando 2 segundos antes de pegar...");
-    await esperarUnToque(2000);
+    console.log(`Chat detectado. Esperando ${clientConfig.timeouts.prePaste}ms antes de pegar...`);
+    await esperarUnToque(clientConfig.timeouts.prePaste);
 
     cajaChat.focus();
 
-    // 2. Pegar mensaje
     console.log("Pegando mensaje...");
-    // Usamos execCommand porque React a veces ignora cambios directos al value
     document.execCommand('insertText', false, mensaje);
 
-    // 3. Esperar 2s
-    console.log(`Mensaje pegado. Esperando 2 segundos para enviar...`);
-    await esperarUnToque(2000);
+    console.log(`Mensaje pegado. Esperando ${clientConfig.timeouts.preSend}ms para enviar...`);
+    await esperarUnToque(clientConfig.timeouts.preSend);
 
-    // 4. Enviar
-    // Buscamos el botón de enviar
-    const btnEnviar = document.querySelector('button[aria-label="Send"]') ||
-                      document.querySelector('span[data-icon="send"]');
+    // Buscamos botón enviar con selectores dinámicos
+    const btnEnviar = document.querySelector(clientConfig.selectors.btnSend) ||
+                      document.querySelector(clientConfig.selectors.btnSendAlt);
 
     if (btnEnviar) {
-         // A veces el click está en un padre o hijo, aseguramos
          const elementoClickeable = btnEnviar.closest('button') || btnEnviar;
-         simularClick(elementoClickeable); // Usamos simularClick para asegurar que React lo tome
+         simularClick(elementoClickeable);
     } else {
-        // Si no está el botón (raro), probamos con Enter
         console.log("No encontré botón enviar, probando ENTER.");
         const enterEvent = new KeyboardEvent('keydown', {
             bubbles: true, cancelable: true, keyCode: 13, key: 'Enter', code: 'Enter'
@@ -279,14 +315,11 @@ async function procesarElEnvioDelMensaje(mensaje) {
     }
     console.log("Mensaje enviado.");
 
-    // Esperamos un poquito antes de dar por terminado para asegurar que se vaya
-    await esperarUnToque(2000);
+    await esperarUnToque(clientConfig.timeouts.postSend);
 
-    // Limpiamos el pendiente SOLO AHORA que terminamos
     await chrome.storage.local.remove('pending_job');
 }
 
-// Utilidad para esperar que aparezca algo en el DOM
 function esperarElemento(selector, timeout) {
     return new Promise(resolve => {
         if (document.querySelector(selector)) {

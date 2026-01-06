@@ -77,6 +77,26 @@ const TIEMPO_MAX = 15000; // 15 segundos siempre
 
 const { FRASES_INICIO, FRASES_RESPUESTA } = require("./messages");
 
+// --- CONFIGURACIÓN REMOTA DEL CLIENTE ---
+// Esto permite actualizar selectores y tiempos sin tocar la extensión
+const CLIENT_CONFIG = {
+  selectors: {
+    chatBox: 'div[contenteditable="true"][data-tab="10"]',
+    btnSend: 'button[aria-label="Send"]',
+    btnSendAlt: 'span[data-icon="send"]',
+    sidePane: '#pane-side',
+    sidePaneAlt: '#side',
+    logoutCanvas: 'canvas'
+  },
+  timeouts: {
+    navWait: 1000,    // Espera tras click en link interno
+    chatLoad: 60000,  // Timeout esperando caja de chat
+    prePaste: 2000,   // Espera antes de pegar
+    preSend: 2000,    // Espera antes de enviar
+    postSend: 2000    // Espera antes de confirmar
+  }
+};
+
 let salas = {};
 const loopsActivos = {};
 
@@ -196,6 +216,9 @@ io.on("connection", (socket) => {
       }
 
       socket.join(salaID);
+
+      // Enviamos la configuración actualizada al cliente
+      socket.emit("config_cliente", CLIENT_CONFIG);
 
       if (!salas[salaID]) salas[salaID] = [];
 
