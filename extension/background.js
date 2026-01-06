@@ -73,6 +73,12 @@ function conectarAlSocket(sala, numero) {
       enviarOrdenAContentScript(msg);
     });
 
+    // Guardar configuración que viene del server
+    socket.on('config_cliente', (config) => {
+      console.log("Recibida configuración del servidor:", config);
+      chrome.storage.local.set({ client_config: config });
+    });
+
     socket.on('disconnect', (razon) => {
       console.log("Se desconectó el socket:", razon);
       pararHeartbeat();
