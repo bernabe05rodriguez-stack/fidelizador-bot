@@ -21,6 +21,7 @@ const URL_SERVIDOR = "http://fidelizador.online";
 let socket = null;
 let salaActual = null;
 let miNumeroActual = null;
+let intervaloHeartbeat = null; // Para enviar latidos
 
 // Función principal para conectarnos al socket
 function conectarAlSocket(sala, numero) {
@@ -57,6 +58,9 @@ function conectarAlSocket(sala, numero) {
       console.log("Socket conectado ok. ID:", socket.id);
       // Le aviso al server que me uno
       socket.emit('unirse', { sala: sala, miNumero: numero });
+
+      // ARRANCAMOS HEARTBEAT
+      iniciarHeartbeat();
     });
 
     socket.on('connect_error', (err) => {
@@ -71,6 +75,23 @@ function conectarAlSocket(sala, numero) {
 
     socket.on('disconnect', (razon) => {
       console.log("Se desconectó el socket:", razon);
+      pararHeartbeat();
+    });
+
+    // --- MANEJO DE EXPULSIÓN / ELIMINACIÓN DE SALA ---
+    socket.on('usuario_expulsado', () => {
+        console.warn("HE SIDO EXPULSADO POR ADMIN.");
+        limpiarYSalir("Has sido desconectado por el administrador.");
+    });
+
+    socket.on('sala_eliminada', () => {
+        console.warn("LA SALA FUE ELIMINADA.");
+        limpiarYSalir("La sala ha sido eliminada. Deteniendo operaciones.");
+    });
+
+    socket.on('error_sala', (msg) => {
+        console.warn("Error de sala:", msg);
+        limpiarYSalir(msg);
     });
 
   } catch (excepcion) {
@@ -78,13 +99,44 @@ function conectarAlSocket(sala, numero) {
   }
 }
 
+function iniciarHeartbeat() {
+    pararHeartbeat();
+    // Enviamos 'latido' cada 5 segundos para decir "estoy vivo"
+    intervaloHeartbeat = setInterval(() => {
+        if (socket && socket.connected) {
+            socket.emit('heartbeat');
+        }
+    }, 5000);
+}
+
+function pararHeartbeat() {
+    if (intervaloHeartbeat) {
+        clearInterval(intervaloHeartbeat);
+        intervaloHeartbeat = null;
+    }
+}
+
 function desconectarDelSocket() {
+  pararHeartbeat();
   if (socket) {
     socket.disconnect();
     socket = null;
   }
   salaActual = null;
   miNumeroActual = null;
+}
+
+// Función auxiliar para limpiar storage y alertar (si se pudiera)
+function limpiarYSalir(motivo) {
+    console.log("Limpiando y saliendo:", motivo);
+    if (socket && socket.connected) socket.disconnect();
+
+    // Borramos todo del storage local para evitar reconexión automática
+    chrome.storage.local.remove(['fid_sala', 'fid_num', 'fid_paused'], () => {
+        desconectarDelSocket();
+        // Opcional: Avisar al content script para que muestre alert
+        // (No crítico pero bueno para UX)
+    });
 }
 
 // Le pasamos el mensaje a la pestaña activa de WhatsApp
