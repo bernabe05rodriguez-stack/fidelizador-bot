@@ -81,16 +81,17 @@ const { FRASES_INICIO, FRASES_RESPUESTA } = require("./messages");
 // Esto permite actualizar selectores y tiempos sin tocar la extensión
 const CLIENT_CONFIG = {
   selectors: {
-    chatBox: 'div[contenteditable="true"][data-tab="10"]',
-    btnSend: 'button[aria-label="Send"]',
-    btnSendAlt: 'span[data-icon="send"]',
-    sidePane: '#pane-side',
-    sidePaneAlt: '#side',
+    // Selectores combinados para mayor robustez
+    chatBox: 'div[contenteditable="true"][data-tab], div[contenteditable="true"][role="textbox"], footer div[contenteditable="true"]',
+    btnSend: 'span[data-icon="send"], button[aria-label="Send"], button[aria-label="Enviar"], div[role="button"] > span[data-icon="send"]',
+    btnSendAlt: 'span[data-icon="send"]', // Fallback conservador
+    sidePane: '#pane-side, #side, div[aria-label="Chat list"], div[aria-label="Lista de chats"]',
+    sidePaneAlt: 'div[role="grid"]',
     logoutCanvas: 'canvas'
   },
   timeouts: {
-    navWait: 1000,    // Espera tras click en link interno
-    chatLoad: 60000,  // Timeout esperando caja de chat
+    navWait: 1500,    // Espera un poco mas tras click
+    chatLoad: 120000, // Timeout extendido a 2 min
     prePaste: 2000,   // Espera antes de pegar
     preSend: 2000,    // Espera antes de enviar
     postSend: 2000    // Espera antes de confirmar
