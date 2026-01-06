@@ -82,15 +82,17 @@ const { FRASES_INICIO, FRASES_RESPUESTA } = require("./messages");
 const CLIENT_CONFIG = {
   selectors: {
     // Selectores combinados para mayor robustez
-    chatBox: 'div[contenteditable="true"][data-tab], div[contenteditable="true"][role="textbox"], footer div[contenteditable="true"]',
+    // sidePane: Se usa para detectar si "WhatsApp Cargó".
+    // Incluimos iconos del header principal (nuevo chat, menu) que NO estan en el login
+    sidePane: '#pane-side, #side, div[aria-label="Chat list"], div[aria-label="Lista de chats"], span[data-icon="chat"], span[data-icon="menu"], div[role="grid"]',
+    sidePaneAlt: '#app > div > div', // Fallback muy generico si todo falla
+    chatBox: 'div[contenteditable="true"][data-tab], div[contenteditable="true"][role="textbox"], footer div[contenteditable="true"], div[contenteditable="true"]',
     btnSend: 'span[data-icon="send"], button[aria-label="Send"], button[aria-label="Enviar"], div[role="button"] > span[data-icon="send"]',
-    btnSendAlt: 'span[data-icon="send"]', // Fallback conservador
-    sidePane: '#pane-side, #side, div[aria-label="Chat list"], div[aria-label="Lista de chats"]',
-    sidePaneAlt: 'div[role="grid"]',
+    btnSendAlt: 'span[data-icon="send"]',
     logoutCanvas: 'canvas'
   },
   timeouts: {
-    navWait: 1500,    // Espera un poco mas tras click
+    navWait: 2000,    // Aumentamos a 2s para dar tiempo al router
     chatLoad: 120000, // Timeout extendido a 2 min
     prePaste: 2000,   // Espera antes de pegar
     preSend: 2000,    // Espera antes de enviar
