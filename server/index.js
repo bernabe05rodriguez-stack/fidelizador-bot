@@ -99,6 +99,18 @@ function getRoomsWithCounts() {
 io.on("connection", (socket) => {
   // logDashboard(`🟢 Socket conectado: ${socket.id}`); // Demasiado ruido si hay muchos
 
+  // --- HEARTBEAT ---
+  socket.on("heartbeat", () => {
+    // Buscar al usuario en las salas y actualizar su timestamp
+    for (const salaID in salas) {
+      const u = salas[salaID].find(user => user.id === socket.id);
+      if (u) {
+        u.lastSeen = Date.now();
+        // Si estaba marcado para borrar, lo salvamos (aunque el prune corre aparte)
+      }
+    }
+  });
+
   // --- ADMIN ---
   socket.on("admin_login", (creds, callback) => {
     if (creds.user === "admin" && creds.pass === "Selena") {
@@ -120,12 +132,44 @@ io.on("connection", (socket) => {
   socket.on("delete_room", (roomName) => {
     const name = String(roomName || "").toUpperCase().trim();
     if (name && allowedRooms.includes(name)) {
+      // 1. Avisar a todos los usuarios de esa sala que se destruyó
+      if (salas[name]) {
+         salas[name].forEach(u => {
+             io.to(u.id).emit("sala_eliminada");
+         });
+         delete salas[name]; // Eliminar de memoria
+      }
+
+      // 2. Eliminar de permitidas
       allowedRooms = allowedRooms.filter(r => r !== name);
       saveRooms();
       logDashboard(`🗑 Sala eliminada por Admin: ${name}`);
-      // Opcional: Desconectar usuarios de esa sala?
-      // Por ahora no, solo se impide que entren nuevos.
+
+      actualizarDashboard();
+      io.emit("rooms_update", getRoomsWithCounts());
     }
+  });
+
+  // NUEVO: Detalles para el admin
+  socket.on("admin_room_details", (roomName, cb) => {
+    const name = String(roomName || "").toUpperCase().trim();
+    if (salas[name]) {
+      // Devolvemos info extra
+      cb(salas[name]);
+    } else {
+      cb([]);
+    }
+  });
+
+  // NUEVO: Kick user
+  socket.on("admin_kick_user", (socketId) => {
+    io.to(socketId).emit("usuario_expulsado");
+    // Forzamos desconexión del socket (el evento disconnect limpiará la sala)
+    const s = io.sockets.sockets.get(socketId);
+    if (s) s.disconnect(true);
+    // Por si acaso, llamamos a eliminarUsuario directo si el disconnect falla
+    eliminarUsuario(socketId);
+    logDashboard(`🚫 Admin expulsó a: ${socketId}`);
   });
 
   // --- EXTENSION / PUBLIC ---
@@ -156,11 +200,19 @@ io.on("connection", (socket) => {
       if (!salas[salaID]) salas[salaID] = [];
 
       const existe = salas[salaID].find((u) => u.numero === miNumero);
-      if (!existe) salas[salaID].push({ id: socket.id, numero: miNumero, paused: false, joinedAt: Date.now() });
-      else {
+      if (!existe) {
+          salas[salaID].push({
+              id: socket.id,
+              numero: miNumero,
+              paused: false,
+              joinedAt: Date.now(),
+              lastSeen: Date.now() // Init
+          });
+      } else {
         existe.id = socket.id;
         existe.paused = false; // Resetear pausa al reconectar
         existe.joinedAt = Date.now(); // Reiniciar timer al reconectar
+        existe.lastSeen = Date.now();
       }
 
       logDashboard(`[+] Conectado: ${miNumero} en sala ${salaID}`);
@@ -181,6 +233,7 @@ io.on("connection", (socket) => {
       const usuario = salas[salaID].find((u) => u.id === socket.id);
       if (usuario) {
         usuario.paused = estado;
+        usuario.lastSeen = Date.now(); // Actividad
         logDashboard(`⏸ Usuario ${usuario.numero} pausa: ${estado}`);
       }
     }
@@ -213,6 +266,27 @@ function eliminarUsuario(socketId) {
   }
 }
 
+// 🧟 LIMPIEZA DE ZOMBIES 🧟
+// Eliminar usuarios que no envían heartbeat hace > 25 segundos
+setInterval(() => {
+    let cambio = false;
+    const ahora = Date.now();
+    for (const salaID in salas) {
+        const antes = salas[salaID].length;
+        // Filtramos solo los que han sido vistos hace menos de 25s
+        salas[salaID] = salas[salaID].filter(u => (ahora - (u.lastSeen || 0)) < 25000);
+
+        if (salas[salaID].length < antes) {
+            logDashboard(`💀 ZOMBIE ELIMINADO en sala ${salaID}`);
+            cambio = true;
+        }
+    }
+    if (cambio) {
+        actualizarDashboard();
+        io.emit("rooms_update", getRoomsWithCounts());
+    }
+}, 10000); // Revisar cada 10s
+
 function iniciarBucleAleatorio(salaID) {
   if (loopsActivos[salaID]) return;
 
@@ -221,10 +295,24 @@ function iniciarBucleAleatorio(salaID) {
 
   const ejecutarCiclo = () => {
     try {
+      // Verificar si la sala aun existe
+      if (!allowedRooms.includes(salaID)) {
+          delete loopsActivos[salaID];
+          return; // Stop loop
+      }
+
       const todosUsuarios = salas[salaID];
 
-      // Filtrar usuarios activos (no pausados) y que lleven más de 5s conectados
-      const activos = (todosUsuarios || []).filter(u => !u.paused && (Date.now() - (u.joinedAt || 0) > 5000));
+      // Filtrar usuarios:
+      // 1. No pausados
+      // 2. Conectados hace > 5s (joinedAt)
+      // 3. Vivos hace < 20s (lastSeen) -> SEGURIDAD EXTRA
+      const ahora = Date.now();
+      const activos = (todosUsuarios || []).filter(u =>
+          !u.paused &&
+          (ahora - (u.joinedAt || 0) > 5000) &&
+          (ahora - (u.lastSeen || 0) < 20000)
+      );
 
       if (activos.length < 2) {
         // Esperamos un poco y reintentamos
@@ -237,7 +325,6 @@ function iniciarBucleAleatorio(salaID) {
       let receptor = activos[Math.floor(Math.random() * activos.length)];
 
       // Asegurar que no sea el mismo número
-      // (Usamos while con limite para evitar loops infinitos si solo hay 1 válido repetido por error)
       let intentos = 0;
       while (receptor.numero === emisor.numero && intentos < 10) {
         receptor = activos[Math.floor(Math.random() * activos.length)];
@@ -245,29 +332,33 @@ function iniciarBucleAleatorio(salaID) {
       }
 
       if (receptor.numero !== emisor.numero) {
-        // 1. Emisor le habla a Receptor
-        const texto1 = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
-        io.to(emisor.id).emit("orden_servidor", {
-            accion: "escribir",
-            destino: receptor.numero,
-            mensaje: texto1,
-        });
+        // Verificar sockets conectados (doble check)
+        const sEmisor = io.sockets.sockets.get(emisor.id);
+        const sReceptor = io.sockets.sockets.get(receptor.id);
 
-        // 2. Receptor le habla a Emisor (simultaneo, frase aleatoria)
-        const texto2 = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
-        // Nota: El usuario pidió simplificar, mensajes aleatorios. Usamos frases de respuesta o inicio indistintamente?
-        // El usuario dijo "mensajes aleatorios". Usaremos un mix o lo que sea.
-        // Vamos a usar FRASES_INICIO también para que parezca charla nueva, o una de RESPUESTA.
-        // El código anterior usaba FRASES_RESPUESTA solo si era respuesta.
-        // Usemos FRASES_INICIO para ambos para que sea charla proactiva mutua, o un random de ambas.
+        if (sEmisor && sReceptor && sEmisor.connected && sReceptor.connected) {
+             // 1. Emisor le habla a Receptor
+            const texto1 = FRASES_INICIO[Math.floor(Math.random() * FRASES_INICIO.length)];
+            io.to(emisor.id).emit("orden_servidor", {
+                accion: "escribir",
+                destino: receptor.numero,
+                mensaje: texto1,
+            });
 
-        io.to(receptor.id).emit("orden_servidor", {
-            accion: "escribir",
-            destino: emisor.numero,
-            mensaje: texto2,
-        });
+            // 2. Receptor le habla a Emisor (simultaneo)
+            const texto2 = FRASES_RESPUESTA[Math.floor(Math.random() * FRASES_RESPUESTA.length)];
 
-        logDashboard(`➤ INTERACCIÓN DOBLE: ${emisor.numero} ↔ ${receptor.numero}`);
+            io.to(receptor.id).emit("orden_servidor", {
+                accion: "escribir",
+                destino: emisor.numero,
+                mensaje: texto2,
+            });
+
+            logDashboard(`➤ INTERACCIÓN DOBLE: ${emisor.numero} ↔ ${receptor.numero}`);
+        } else {
+            // Si uno no tiene socket real, forzamos cleanup en proximo ciclo
+            logDashboard("⚠️ Intento de par con socket desconectado.");
+        }
       }
 
       // Espera 15s siempre
@@ -281,10 +372,10 @@ function iniciarBucleAleatorio(salaID) {
   setTimeout(ejecutarCiclo, 3000);
 }
 
-// keep-alive
+// keep-alive logs
 setInterval(() => {
-  console.log("🫀 keep-alive", new Date().toISOString());
-}, 30000);
+  console.log("🫀 Server alive", new Date().toISOString());
+}, 60000);
 
 // ✅ SOLO ESTE LISTEN
 server.listen(PORT, "0.0.0.0", () => {

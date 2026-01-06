@@ -5,49 +5,105 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Panel de Control - Fidelizador</title>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-    input, button { padding: 10px; margin: 5px 0; width: 100%; box-sizing: border-box; }
-    button { cursor: pointer; background-color: #007bff; color: white; border: none; font-weight: bold; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background-color: #f4f6f9; }
+    h1 { color: #333; text-align: center; }
+
+    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+
+    input, button { padding: 12px; margin: 5px 0; border-radius: 4px; border: 1px solid #ddd; width: 100%; box-sizing: border-box; }
+    input:focus { border-color: #007bff; outline: none; }
+
+    button { cursor: pointer; background-color: #007bff; color: white; border: none; font-weight: bold; transition: background 0.2s; }
     button:hover { background-color: #0056b3; }
-    button.delete { background-color: #dc3545; width: auto; float: right; }
+    button.delete { background-color: #dc3545; width: auto; font-size: 0.8rem; padding: 5px 10px; }
     button.delete:hover { background-color: #c82333; }
+    button.kick { background-color: #ffc107; color: #000; width: auto; font-size: 0.8rem; padding: 5px 10px; }
+    button.kick:hover { background-color: #e0a800; }
+
     .hidden { display: none; }
-    .room-item { padding: 10px; border: 1px solid #ddd; margin-bottom: 5px; background: #f9f9f9; display: flex; justify-content: space-between; align-items: center; }
+
+    .room-item {
+      padding: 15px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+    .room-item:hover { background-color: #f1f1f1; }
+    .room-item:last-child { border-bottom: none; }
+
+    /* Modal / Details Styles */
+    #room-details { margin-top: 10px; padding-top: 10px; border-top: 2px solid #eee; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #ddd; }
+    th { background-color: #f8f9fa; font-weight: 600; }
+    .status-active { color: green; font-weight: bold; }
+    .status-paused { color: orange; font-weight: bold; }
+    .status-zombie { color: red; font-weight: bold; }
+
+    .back-btn { background-color: #6c757d; width: auto; display: inline-block; padding: 5px 15px; }
   </style>
 </head>
 <body>
 
-  <h1>Panel Admin</h1>
+  <h1>Panel de Control Fidelizador</h1>
 
   <!-- LOGIN -->
-  <div id="login-section">
+  <div id="login-section" class="card">
     <h3>Iniciar Sesión</h3>
     <input type="text" id="user" placeholder="Usuario">
     <input type="password" id="pass" placeholder="Contraseña">
     <button id="btnLogin">Entrar</button>
-    <p id="loginMsg" style="color: red;"></p>
+    <p id="loginMsg" style="color: red; text-align: center; margin-top: 10px;"></p>
   </div>
 
   <!-- DASHBOARD -->
   <div id="dashboard-section" class="hidden">
-    <h3>Gestión de Salas</h3>
 
-    <div>
-      <input type="text" id="newRoomName" placeholder="Nombre de nueva sala">
-      <button id="btnCreate">Crear Sala</button>
+    <!-- CREAR SALA -->
+    <div class="card">
+      <h3>Crear Nueva Sala</h3>
+      <div style="display: flex; gap: 10px;">
+        <input type="text" id="newRoomName" placeholder="Nombre de la sala (Ej: SALA1)">
+        <button id="btnCreate" style="width: auto;">Crear</button>
+      </div>
     </div>
 
-    <h4>Salas Existentes</h4>
-    <div id="roomsList">Cargando...</div>
+    <!-- LISTA DE SALAS -->
+    <div class="card">
+      <h3>Salas Activas</h3>
+      <div id="roomsList">Cargando...</div>
+    </div>
+
+    <!-- DETALLES DE SALA (Modal-like) -->
+    <div id="details-section" class="card hidden">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 id="detailsTitle">Detalles de Sala</h3>
+        <button class="back-btn" id="btnCloseDetails">Cerrar</button>
+      </div>
+      <div id="usersTableContainer">
+        <p>Cargando usuarios...</p>
+      </div>
+    </div>
+
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
+
+    // Elementos
     const loginSection = document.getElementById('login-section');
     const dashboardSection = document.getElementById('dashboard-section');
+    const detailsSection = document.getElementById('details-section');
+
     const loginMsg = document.getElementById('loginMsg');
     const roomsList = document.getElementById('roomsList');
+    const usersTableContainer = document.getElementById('usersTableContainer');
+    const detailsTitle = document.getElementById('detailsTitle');
+
+    let currentRoom = null; // Sala que estamos viendo actualmente
 
     // LOGIN
     document.getElementById('btnLogin').addEventListener('click', () => {
@@ -58,14 +114,14 @@
         if(res.success) {
           loginSection.classList.add('hidden');
           dashboardSection.classList.remove('hidden');
-          socket.emit('get_rooms'); // Cargar salas iniciales
+          socket.emit('get_rooms');
         } else {
-          loginMsg.innerText = res.msg || "Error de autenticación";
+          loginMsg.innerText = res.msg || "Credenciales incorrectas";
         }
       });
     });
 
-    // CREATE ROOM
+    // CREAR SALA
     document.getElementById('btnCreate').addEventListener('click', () => {
       const name = document.getElementById('newRoomName').value;
       if(name) {
@@ -74,36 +130,144 @@
       }
     });
 
-    // DELETE ROOM (Delegated)
+    // CERRAR DETALLES
+    document.getElementById('btnCloseDetails').addEventListener('click', () => {
+        detailsSection.classList.add('hidden');
+        currentRoom = null;
+    });
+
+    // EVENTOS DELEGADOS (Click en salas o botones)
     roomsList.addEventListener('click', (e) => {
+      // Eliminar sala
       if(e.target.classList.contains('delete')) {
+        e.stopPropagation();
         const roomName = e.target.dataset.room;
-        if(confirm(`¿Eliminar sala "${roomName}"?`)) {
+        if(confirm(`⚠️ ¿Estás seguro de eliminar la sala "${roomName}"? \nEsto desconectará a todos los usuarios.`)) {
           socket.emit('delete_room', roomName);
+          if(currentRoom === roomName) {
+            detailsSection.classList.add('hidden');
+            currentRoom = null;
+          }
         }
+        return;
+      }
+
+      // Click en la fila de sala (para ver detalles)
+      const roomItem = e.target.closest('.room-item');
+      if(roomItem) {
+        const roomName = roomItem.dataset.roomName;
+        verDetallesSala(roomName);
       }
     });
 
-    // UPDATES
+    // KICK USER (Delegado en tabla de detalles)
+    usersTableContainer.addEventListener('click', (e) => {
+        if(e.target.classList.contains('kick')) {
+            const socketId = e.target.dataset.id;
+            const phone = e.target.dataset.phone;
+            if(confirm(`¿Expulsar al usuario ${phone}?`)) {
+                socket.emit('admin_kick_user', socketId);
+                // Actualizamos visualmente rápido (aunque el socket avisará cambios luego)
+                e.target.closest('tr').style.opacity = '0.3';
+                e.target.disabled = true;
+            }
+        }
+    });
+
+    // FUNCIONES LOGICAS
+    function verDetallesSala(roomName) {
+        currentRoom = roomName;
+        detailsTitle.innerText = `Usuarios en: ${roomName}`;
+        detailsSection.classList.remove('hidden');
+        usersTableContainer.innerHTML = '<p>Consultando servidor...</p>';
+
+        // Pedir datos al server
+        socket.emit('admin_room_details', roomName, (users) => {
+            renderUsersTable(users);
+        });
+    }
+
+    function renderUsersTable(users) {
+        if(!users || users.length === 0) {
+            usersTableContainer.innerHTML = '<p>No hay usuarios conectados en esta sala.</p>';
+            return;
+        }
+
+        const rows = users.map(u => {
+            const lastSeenSeconds = Math.floor((Date.now() - (u.lastSeen || 0)) / 1000);
+            let statusClass = u.paused ? 'status-paused' : 'status-active';
+            let statusText = u.paused ? 'Pausado' : 'Activo';
+
+            // Si no da señales de vida hace mucho (aunque el server no lo haya borrado aun)
+            if(lastSeenSeconds > 30) {
+                statusClass = 'status-zombie';
+                statusText = 'Zombie?';
+            }
+
+            return `
+                <tr>
+                    <td>${u.numero}</td>
+                    <td><small>${u.id.substring(0, 6)}...</small></td>
+                    <td class="${statusClass}">${statusText}</td>
+                    <td>Hace ${lastSeenSeconds}s</td>
+                    <td>
+                        <button class="kick" data-id="${u.id}" data-phone="${u.numero}">Expulsar</button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        usersTableContainer.innerHTML = `
+            <table>
+                <thead>
+                    <tr>
+                        <th>Teléfono</th>
+                        <th>ID</th>
+                        <th>Estado</th>
+                        <th>Visto</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+        `;
+    }
+
+    // SOCKET LISTENERS
     socket.on('rooms_update', (rooms) => {
-      renderRooms(rooms);
+      renderRoomsList(rooms);
+      // Si estamos viendo detalles de una sala, refrescamos la tabla también
+      if(currentRoom) {
+          socket.emit('admin_room_details', currentRoom, (users) => {
+            renderUsersTable(users);
+          });
+      }
     });
 
-    // Initial load response
     socket.on('rooms_list', (rooms) => {
-      renderRooms(rooms);
+      renderRoomsList(rooms);
     });
 
-    function renderRooms(rooms) {
+    // Logs del servidor (opcional, para debug visual)
+    socket.on('log_servidor', (msg) => {
+        console.log("SERVER LOG:", msg);
+    });
+
+    function renderRoomsList(rooms) {
       if(!rooms || rooms.length === 0) {
         roomsList.innerHTML = "<p>No hay salas creadas.</p>";
         return;
       }
 
       roomsList.innerHTML = rooms.map(r => `
-        <div class="room-item">
-          <span><strong>${r.name}</strong> (${r.count} usuarios)</span>
-          <button class="delete" data-room="${r.name}">Eliminar</button>
+        <div class="room-item" data-room-name="${r.name}">
+          <div>
+              <strong>${r.name}</strong>
+              <span style="color: #666; font-size: 0.9em;">(${r.count} usuarios)</span>
+          </div>
+          <button class="delete" data-room="${r.name}">Eliminar Sala</button>
         </div>
       `).join('');
     }
